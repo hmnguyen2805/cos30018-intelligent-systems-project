@@ -1,0 +1,10 @@
+pytest>=8.0
+smolagents
+gradio
+scikit-learn
+pandas
+numpy
+python-dotenv
+
+# Local model runtime — install Ollama separately (not a pip package):
+# https://ollama.com/download
