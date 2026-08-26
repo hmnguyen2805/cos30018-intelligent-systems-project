@@ -1,6 +1,9 @@
 """
-Shared data contracts for the sequential pipeline:
-    Detection -> CTI Correlation -> Response
+Shared data contracts for the manager-subagent pipeline:
+
+    Detection Manager (+ Detection Subagent)
+    Mitigation Manager (+ Correlation Subagent)
+    -> Judge
 
 Only this file and base.py are fixed across the team. Everything else about
 how an agent works internally is up to its owner.
@@ -30,7 +33,7 @@ class TrafficEvent:
 
 @dataclass
 class DetectionResult:
-    """Output of the Detection Agent."""
+    """Output of the Detection Manager (produced via its Detection Subagent)."""
     event: TrafficEvent
     is_anomalous: bool
     confidence: float                      # 0.0 - 1.0
@@ -40,7 +43,7 @@ class DetectionResult:
 
 @dataclass
 class CorrelationResult:
-    """Output of the CTI Correlation Agent."""
+    """Output of the Correlation Subagent (used internally by the Mitigation Manager)."""
     detection: DetectionResult
     matched_technique_ids: List[str] = field(default_factory=list)
     confidence: float = 0.0
@@ -49,8 +52,17 @@ class CorrelationResult:
 
 
 @dataclass
+class MitigationRecommendation:
+    """Output of the Mitigation Manager — its conclusion, prior to arbitration by the Judge."""
+    correlation: CorrelationResult
+    proposed_action: str
+    confidence: float = 0.0
+    trace: List[TraceStep] = field(default_factory=list)
+
+
+@dataclass
 class ResponseRecommendation:
-    """Output of the Response Agent — the pipeline's final result."""
+    """Output of the Judge Agent — the pipeline's final result."""
     correlation: CorrelationResult
     recommended_action: str
     agents_agree: bool
