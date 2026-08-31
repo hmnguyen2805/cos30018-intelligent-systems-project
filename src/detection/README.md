@@ -1,42 +1,62 @@
-# Detection Agent
+# Detection Manager
 
 **Owner:** Vinh Nghiem
 
-Takes a `TrafficEvent` (raw traffic features) and decides whether it's anomalous.
+## Your role just changed — but your existing work didn't
 
-## Your contract
-run(event: TrafficEvent) -> DetectionResult
+Per the tutor's manager-subagent recommendation, Detection is now two layers: a
+**Detection Manager** that owns the top-level contract, and a **Detection Subagent**
+underneath it that does the actual classification work.
 
 
-That's the only thing the rest of the pipeline cares about. Structure the internals
-however works for you — this folder is yours.
+## Suggested structure
 
-## Important: this needs to be a real agent, not just a classifier call
+```
+src/detection/
+├── subagent.py     # your existing agent.py content, renamed — unchanged
+├── manager.py       # new: DetectionManager
+├── classifier.py    # still needs to be pushed — see blocker below
+└── README.md
+```
 
-Per the assignment's grading criteria, a single function call (even a well-built
-scikit-learn classifier) does **not** count as an agent — it needs a reasoning loop:
-decide what to check, take an action, observe the result, and possibly revise before
-answering. So don't just return whatever the classifier says on the first pass.
+## Contract
 
-A workable pattern: treat the classifier as a **tool** your agent calls, not the agent
-itself. If the classifier returns a borderline confidence score, have the agent decide
-to re-examine (e.g. classify a wider time window, or re-run with adjusted features)
-before finalizing — that borderline-handling is what makes it a loop instead of one call.
+```
+DetectionManager.run(event: TrafficEvent) -> DetectionResult
+```
 
-Call `self.log_step(thought=..., action=..., observation=...)` (inherited from
-`BaseAgent`) each time you reason or call the classifier — that's what lets the
-pipeline/UI show what your agent actually did, and it's required for the "observable
-reasoning-action iterations" part of the rubric.
+Same shape the old `DetectionAgent` had — the Manager delegates to the subagent
+internally and owns any manager-level oversight (e.g. later, deciding whether to trust
+the subagent's result as-is, or dispatch to a second detection subagent if one gets
+added). It doesn't need to be complex to satisfy the "delegation" requirement — the act
+of delegating is what counts, not how much logic sits in the Manager itself.
 
-## Suggested next steps
+A minimal version is fine to start:
 
-1. Pick one dataset to start with (CICIDS2017 is the most common starting point).
-2. Get a baseline classifier trained and evaluated outside the agent class first
-   (a notebook or standalone script is fine) before wiring it in as a tool.
-3. Add the reasoning loop around it — even a simple one (check confidence, re-check
-   once if borderline, then decide) satisfies the requirement.
-4. `tests/test_pipeline_smoke.py` should keep passing throughout — it only checks the
-   contract, not your model's accuracy.
+```python
+# manager.py
+from src.detection.subagent import DetectionSubagent
+from src.shared.base import BaseAgent
+from src.shared.schemas import DetectionResult, TrafficEvent
+
+
+class DetectionManager(BaseAgent):
+    name = "detection_manager"
+
+    def __init__(self):
+        super().__init__()
+        self._subagent = DetectionSubagent()
+
+    def run(self, input_data: TrafficEvent) -> DetectionResult:
+        self._trace = []
+        self.log_step(thought="Delegate to Detection Subagent.", action="delegate_to_subagent")
+        return self._subagent.run(input_data)
+```
+
+The Detection Manager's conclusion (`DetectionResult`) goes two places: across to the
+Mitigation Manager (Callum), since Correlation needs to know what was detected, and
+down to the Judge (Minh), who compares it against the Mitigation Manager's conclusion
+to produce the final result.
 
 ## Dependencies
 
