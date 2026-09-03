@@ -1,0 +1,2 @@
+kagglehub   # train.py: downloads CICIDS2017 from Kaggle
+joblib      # classifier.py/train.py: save/load the trained model artifact (also a scikit-learn dep, declared explicitly since we import it directly)

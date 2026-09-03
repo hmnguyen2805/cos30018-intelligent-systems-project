@@ -1,11 +1,13 @@
 """
-Detection Agent — decides whether a TrafficEvent looks anomalous.
+Detection Subagent — decides whether a TrafficEvent looks anomalous.
 
 The baseline RandomForest (classifier.py) is a tool the agent calls, not the
 agent itself. On a borderline confidence score, the agent re-examines via
 per-tree vote spread (a second, finer-grained tool call) before finalizing —
 that borderline-handling loop is what makes this an agent rather than a
 single classifier call.
+
+Owned by the Detection Manager (manager.py), which delegates each event here.
 """
 from typing import Optional
 
@@ -18,8 +20,8 @@ BORDERLINE_HIGH = 0.6
 DISAGREEMENT_THRESHOLD = 0.15  # tree-vote std above this = low ensemble consensus
 
 
-class DetectionAgent(BaseAgent):
-    name = "detection_agent"
+class DetectionSubagent(BaseAgent):
+    name = "detection_subagent"
 
     def __init__(self, model_path: Optional[str] = None):
         super().__init__()
