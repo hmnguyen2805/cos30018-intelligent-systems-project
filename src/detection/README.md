@@ -473,7 +473,7 @@ below) is the next lever, not something this evaluation script can decide on its
 ### Offline evaluation: full-split batch metrics + threshold sweep
 
 ```sh
-python -m src.detection.evaluate --offline [--category-threshold 0.6]
+python -m src.detection.evaluate --offline [--category-threshold 0.9] [--min-category-accuracy 0.99]
 ```
 
 A different mode from everything above: no `DetectionManager`/`DetectionSubagent`, no per-event
@@ -483,27 +483,107 @@ agent loop, no LLM at all — `offline_eval.py` batch-predicts both classifiers 
 `DetectionManager.run()` per event. It reports:
 
 - **binary classifier**: precision/recall/F1/ROC-AUC over the whole test split.
-- **category classifier**: per-class precision/recall/F1 (+ macro F1, row counts/support) on
-  true attacks the binary model also caught, at `--category-threshold` (default: the current
-  `CATEGORY_CONFIDENCE_THRESHOLD`).
+- **category classifier**: per-class precision/recall/F1 (+ row counts/support), at
+  `--category-threshold` (default: the current `CATEGORY_CONFIDENCE_THRESHOLD`) — see "Per-class
+  table" below for exactly what's scored and why.
 - **false-positive categorisation**: count + rate (see above).
 - **model disagreement count**: binary-anomalous events where the category model's top vote was
   Benign.
-- **% Unknown among true attacks**: how often the thresholded decision punted.
+- **coverage**: % of true attacks given a specific category (not punted to `Unknown`).
 
-It then sweeps `CATEGORY_CONFIDENCE_THRESHOLD` over `offline_eval.CATEGORY_THRESHOLD_SWEEP`
+#### Per-class table: Heartbleed, Benign, and macro F1 scope
+
+Two things the per-class table deliberately does NOT do, both found from a real `--offline` run:
+
+1. **It never conflates "Unknown" as a true label with "Unknown" as a low-confidence
+   prediction.** `data.map_cicids_label_to_category` maps CICIDS2017's `Heartbleed` label to the
+   *string* `"Unknown"` — the same string `subagent.py._choose_category` uses for a
+   low-confidence punt or a binary/category model disagreement. A first version of this table
+   scored them as the same class, which silently combined "the model correctly recognized this
+   as Heartbleed" with "the model wasn't sure" into one meaningless row (precision ~0, recall
+   ~1, dragging macro F1 down for no real reason). Fix (`is_heartbleed_label`): **Heartbleed
+   rows are excluded from category scoring entirely** and their count reported separately
+   (printed as `excluded N Heartbleed event(s)...`) — chosen over giving Heartbleed its own
+   category, because the trained category model was never taught to tell the two apart (it's
+   trained on `data.map_cicids_label_to_category`'s output, which conflates them the same way);
+   a real "Heartbleed" class would need retraining, not just a reporting fix. Low-confidence
+   predictions are reported as **coverage** (% of true attacks given a specific category, an
+   `--offline` top-line metric) instead of ever being a class row.
+2. **Per-class PRECISION now includes binary false positives.** The table is computed over every
+   *flagged* flow — true attacks the binary model also caught, **plus its false positives**,
+   whose true class is `classifier.BENIGN_CATEGORY` ("Benign") — so a benign flow the category
+   model mislabeled "Botnet" now correctly counts against Botnet's precision, which it couldn't
+   before false positives were in the scoring universe at all. `n` (attack count) and `n_table`
+   (attacks + false positives) are both reported. `Benign`'s own row will always read
+   precision=recall=0 — "Benign" is never a possible `chosen_category` value (a Benign top vote
+   is always reported as `"Unknown"`, never `"Benign"` — see "Category decision" above), so it
+   can never itself be "predicted"; its purpose is solely to penalize other classes' precision.
+   **Macro F1 is computed over real attack classes only** — the Benign row is excluded from the
+   average (it would otherwise unfairly drag macro F1 toward 0 for a class that structurally can
+   never be "hit").
+
+A real run at the current default (threshold=0.90, excluding 3 Heartbleed events):
+
+| category | precision | recall | f1 | support |
+|---|---|---|---|---|
+| Benign | 0.000 | 0.000 | 0.000 | 383 |
+| Botnet | 0.946 | 0.791 | 0.861 | 330 |
+| BruteForce | 1.000 | 0.993 | 0.997 | 1,760 |
+| DDoS | 1.000 | 0.998 | 0.999 | 25,627 |
+| DoS | 1.000 | 0.989 | 0.994 | 38,670 |
+| Infiltration | 1.000 | 0.600 | 0.750 | 5 |
+| PortScan | 0.990 | 0.982 | 0.986 | 18,151 |
+| WebAttack | 0.997 | 0.932 | 0.964 | 426 |
+
+n=84,969 true attacks, n_table=85,352 (+383 false positives as Benign). accuracy=0.9892, raw
+top-1 accuracy=0.9980, coverage=98.9%, **macro F1 (attack classes only) = 0.936**. Now that
+Heartbleed's phantom row and its ~0 f1 are gone, macro F1 is markedly higher than the earlier
+(incorrect) 0.823 figure — the two classes still visibly dragging it down are **Botnet**
+(support=330, recall 0.791 — some correct-but-lower-confidence Botnet calls get punted to
+`Unknown` at this threshold) and **Infiltration** (support=5, recall 0.600 — too few rows to
+draw a real conclusion from). Botnet's and PortScan's precision (0.946, 0.990) are now visibly
+below 1.000 — exactly the false-positive contamination item 2 exists to surface: some of the 383
+binary false positives get mislabeled as those specific categories instead of punted to
+`Unknown` (see the false-positive categorisation rate below).
+
+#### Threshold sweep and recommendation rule
+
+`--offline` then sweeps `CATEGORY_CONFIDENCE_THRESHOLD` over `offline_eval.CATEGORY_THRESHOLD_SWEEP`
 (0.5/0.6/0.7/0.8/0.9) — **on a VALIDATION split carved from TRAIN**
 (`data.split_validation`, a separate fixed random_state from `data.split_train_test`), never on
-TEST, so choosing a threshold never tunes on the data the report above is scored on. For each
-threshold it shows category accuracy and % Unknown on true attacks, plus the false-positive
-categorisation rate, prints the table, and saves it to
-`src/detection/results/category_threshold_sweep.csv` (gitignored). It then **prints** (never
-applies) a recommended threshold — the sweep row maximizing validation category accuracy, ties
-broken by the lower false-positive rate, then by the higher (more conservative) threshold — and
-reports that recommended threshold's category accuracy / % Unknown / FP rate on TEST, for
-comparison against the `--category-threshold` report above.
+TEST, so choosing a threshold never tunes on the data the report above is scored on (Heartbleed
+excluded here too, for the same reason). Prints the table and saves it to
+`src/detection/results/category_threshold_sweep.csv` (gitignored). A real run:
+
+| threshold | n_scored | accuracy | %unknown | n_fp | fp_rate |
+|---|---|---|---|---|---|
+| 0.50 | 68,118 | 0.999 | 0.1 | 190 | 61.1 |
+| 0.60 | 68,118 | 0.998 | 0.2 | 190 | 49.5 |
+| 0.70 | 68,118 | 0.997 | 0.3 | 190 | 46.8 |
+| 0.80 | 68,118 | 0.995 | 0.5 | 190 | 45.8 |
+| 0.90 | 68,118 | 0.992 | 0.8 | 190 | 43.7 |
+
+**Recommendation rule** (`recommend_category_threshold`, `--min-category-accuracy`, default
+`0.99`): recommend the **highest** swept threshold whose validation category accuracy is `>=
+min_category_accuracy` — among thresholds that all clear the accuracy bar, prefer the strictest
+one (more conservative: more borderline guesses get punted to `Unknown` instead of risking a
+wrong specific answer). If no threshold clears the bar, falls back to the single
+highest-accuracy row (ties broken by the lower false-positive categorisation rate, then the
+higher threshold) and says so explicitly. `--offline` always prints the exact rule that fired
+(`describe_recommendation_rule`) alongside the recommendation, then reports that threshold's
+full per-class table on TEST for comparison.
 `subagent.DEFAULT_CATEGORY_CONFIDENCE_THRESHOLD` is never changed automatically by this script —
-the recommendation is informational.
+only printed as a recommendation.
+
+**On the real sweep above, every one of the 5 swept values (0.999 down to 0.992) already clears
+the 0.99 bar** — the rule picks the *highest* threshold among them, **0.90**, directly, with no
+fallback (`meets_min_accuracy: True`); it does not matter that 0.90's own accuracy (0.992) is
+the lowest of the five, since all five qualify and the rule prefers the strictest (highest)
+threshold among qualifiers. (An earlier version of this doc incorrectly described this as a
+fallback — that was a writing error, not a bug in `recommend_category_threshold` itself; the
+comparison and the printed rule text were always correct, see `describe_recommendation_rule`'s
+"met" branch. `test_recommend_category_threshold_real_looking_values_all_clear_the_bar_no_fallback`
+pins this exact scenario.) **0.90 is the current default** (see below).
 
 ## Dependencies
 

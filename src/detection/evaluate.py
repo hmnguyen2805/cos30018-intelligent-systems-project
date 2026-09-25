@@ -19,7 +19,7 @@ Usage:
                                       [--sampling random|borderline] [--llm-timeout 20]
                                       [--llm-delay 0]
 
-    python -m src.detection.evaluate --offline [--category-threshold 0.6]
+    python -m src.detection.evaluate --offline [--category-threshold 0.9] [--min-category-accuracy 0.99]
         Offline, no-LLM batch evaluation over the entire test split, plus a
         CATEGORY_CONFIDENCE_THRESHOLD sweep on a validation split carved from
         train — see offline_eval.py. Ignores every other flag above.
@@ -404,6 +404,11 @@ def main():
                               f"(default: subagent.DEFAULT_CATEGORY_CONFIDENCE_THRESHOLD = "
                               f"{DEFAULT_CATEGORY_CONFIDENCE_THRESHOLD}). The sweep itself always "
                               "covers offline_eval.CATEGORY_THRESHOLD_SWEEP regardless of this flag.")
+    parser.add_argument("--min-category-accuracy", type=float,
+                         default=offline_eval.DEFAULT_MIN_CATEGORY_ACCURACY,
+                         help="Only with --offline: recommend the HIGHEST swept threshold whose "
+                              "validation category accuracy (on true attacks) is >= this value "
+                              f"(default {offline_eval.DEFAULT_MIN_CATEGORY_ACCURACY}).")
     parser.add_argument("--sample-size", type=int, default=200)
     parser.add_argument("--random-state", type=int, default=42,
                          help="Controls only the held-out SAMPLING step (which rows of the fixed "
@@ -418,7 +423,7 @@ def main():
     args = parser.parse_args()
 
     if args.offline:
-        offline_eval.run_offline_evaluation(args.category_threshold)
+        offline_eval.run_offline_evaluation(args.category_threshold, args.min_category_accuracy)
         return
 
     print(f"DETECTION_LLM_MODEL={resolve_llm_model_id()}  DETECTION_LLM_MODE={resolve_llm_mode()}")

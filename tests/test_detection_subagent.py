@@ -1331,7 +1331,11 @@ def make_agent_with_category_model(classes_and_probas, mock_load, **kwargs):
 @patch("src.detection.classifier.predict_proba_anomalous")
 def test_choose_category_uses_top_class_when_above_threshold(mock_predict):
     mock_predict.return_value = 0.95
-    agent = make_agent_with_category_model([("DDoS", 0.9), ("PortScan", 0.1)])
+    # Explicit threshold: this test's story (a probability clearly above the threshold is
+    # trusted) shouldn't depend on whatever DEFAULT_CATEGORY_CONFIDENCE_THRESHOLD happens to be.
+    agent = make_agent_with_category_model(
+        [("DDoS", 0.9), ("PortScan", 0.1)], category_confidence_threshold=0.6,
+    )
 
     result = agent.run(make_event())
 
@@ -1341,7 +1345,9 @@ def test_choose_category_uses_top_class_when_above_threshold(mock_predict):
 @patch("src.detection.classifier.predict_proba_anomalous")
 def test_choose_category_falls_back_to_unknown_below_threshold(mock_predict):
     mock_predict.return_value = 0.95
-    agent = make_agent_with_category_model([("DDoS", 0.55), ("PortScan", 0.45)])
+    agent = make_agent_with_category_model(
+        [("DDoS", 0.55), ("PortScan", 0.45)], category_confidence_threshold=0.6,
+    )
 
     result = agent.run(make_event())
 
@@ -1363,7 +1369,9 @@ def test_choose_category_threshold_is_configurable(mock_predict):
 @patch("src.detection.classifier.predict_proba_anomalous")
 def test_choose_category_at_exactly_the_threshold_is_accepted(mock_predict):
     mock_predict.return_value = 0.95
-    agent = make_agent_with_category_model([("DDoS", 0.6), ("PortScan", 0.4)])  # default threshold is 0.6
+    agent = make_agent_with_category_model(
+        [("DDoS", 0.6), ("PortScan", 0.4)], category_confidence_threshold=0.6,
+    )
 
     result = agent.run(make_event())
 
@@ -1384,7 +1392,9 @@ def test_benign_event_gets_no_category_tag_even_with_a_category_model_loaded(moc
 @patch("src.detection.classifier.predict_proba_anomalous")
 def test_category_decision_trace_step_records_chosen_and_raw_top_and_threshold(mock_predict):
     mock_predict.return_value = 0.95
-    agent = make_agent_with_category_model([("DDoS", 0.55), ("PortScan", 0.45)])
+    agent = make_agent_with_category_model(
+        [("DDoS", 0.55), ("PortScan", 0.45)], category_confidence_threshold=0.6,
+    )
 
     result = agent.run(make_event())
 
@@ -1431,7 +1441,9 @@ def test_choose_category_reports_unknown_when_category_model_votes_benign(mock_p
 @patch("src.detection.classifier.predict_proba_anomalous")
 def test_benign_top_vote_is_logged_as_model_disagreement_not_category_decision(mock_predict):
     mock_predict.return_value = 0.95
-    agent = make_agent_with_category_model([("Benign", 0.99), ("DDoS", 0.01)])
+    agent = make_agent_with_category_model(
+        [("Benign", 0.99), ("DDoS", 0.01)], category_confidence_threshold=0.6,
+    )
 
     result = agent.run(make_event())
 

@@ -42,8 +42,11 @@ DISAGREEMENT_THRESHOLD = 0.15  # tree-vote std above this = low ensemble consens
 
 # Below this, classifier.predict_attack_category's top class isn't trusted and code reports
 # "Unknown" instead of a possibly-wrong specific category. Same role as the borderline band
-# above, but for the category decision rather than is_anomalous.
-DEFAULT_CATEGORY_CONFIDENCE_THRESHOLD = 0.6
+# above, but for the category decision rather than is_anomalous. Set from
+# offline_eval.py's --offline threshold sweep: the highest swept threshold whose validation
+# category accuracy on true attacks cleared 0.99 (see README's "Category decision" section for
+# the full sweep and the false-positive-categorisation tradeoff this threshold doesn't fully fix).
+DEFAULT_CATEGORY_CONFIDENCE_THRESHOLD = 0.9
 CATEGORY_TOP_K = 3
 
 
