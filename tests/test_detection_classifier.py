@@ -72,6 +72,37 @@ def test_tree_vote_spread_matches_manual_per_tree_vote_count():
     assert vote_std == pytest.approx(manual_votes.std())
 
 
+def test_top_features_returns_k_items_without_medians():
+    artifact = make_artifact()
+    features = {"duration": 10.0, "packet_count": 10.0}
+    result = classifier.top_features(artifact, features, k=1)
+    assert len(result) == 1
+    assert result[0]["name"] in FEATURE_NAMES
+    assert result[0]["value"] == features[result[0]["name"]]
+    assert "median" not in result[0]
+
+
+def test_top_features_includes_median_when_artifact_has_it():
+    artifact = make_artifact()
+    artifact["feature_medians"] = {"duration": 1.0, "packet_count": 2.0}
+    result = classifier.top_features(artifact, {"duration": 10.0, "packet_count": 10.0}, k=2)
+    assert len(result) == 2
+    for entry in result:
+        assert entry["median"] == artifact["feature_medians"][entry["name"]]
+
+
+def test_top_features_caps_at_number_of_available_features():
+    artifact = make_artifact()
+    result = classifier.top_features(artifact, {"duration": 1.0, "packet_count": 1.0}, k=10)
+    assert len(result) == len(FEATURE_NAMES)
+
+
+def test_top_features_missing_feature_value_defaults_to_zero():
+    artifact = make_artifact()
+    result = classifier.top_features(artifact, {}, k=2)
+    assert all(entry["value"] == 0.0 for entry in result)
+
+
 def test_load_artifact_missing_path_raises_clear_error(tmp_path):
     missing = tmp_path / "does_not_exist.joblib"
     with pytest.raises(FileNotFoundError, match="train.py"):

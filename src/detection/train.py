@@ -86,8 +86,13 @@ def main():
     print(classification_report(y_test, y_pred, target_names=["benign", "anomalous"]))
     print(f"ROC-AUC: {roc_auc_score(y_test, y_proba):.4f}")
 
+    feature_medians = {name: float(df[name].median()) for name in feature_names}
+
     os.makedirs(os.path.dirname(classifier.DEFAULT_MODEL_PATH), exist_ok=True)
-    joblib.dump({"model": model, "feature_names": feature_names}, classifier.DEFAULT_MODEL_PATH)
+    joblib.dump(
+        {"model": model, "feature_names": feature_names, "feature_medians": feature_medians},
+        classifier.DEFAULT_MODEL_PATH,
+    )
     print(f"Saved artifact to {classifier.DEFAULT_MODEL_PATH}")
 
 
