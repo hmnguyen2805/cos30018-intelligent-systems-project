@@ -12,16 +12,23 @@ Subagent** underneath it that does the actual classification work.
 src/detection/
 ├── manager.py                    # DetectionManager — owns the contract, delegates
 ├── subagent.py                   # DetectionSubagent — classifies, handles borderline cases,
-│                                  # chooses the attack category, optionally runs the LLM
-│                                  # explanation layer
+│                                  # chooses the attack category, optionally delegates to
+│                                  # llm_layer.py for an explanation. Reads top-to-bottom as:
+│                                  # classify -> tree votes -> category decision -> optional
+│                                  # LLM explanation.
+├── llm_layer.py                  # LLMExplanationLayer — MCP connection, agent/single_shot
+│                                  # dispatch, retries, circuit breaker, validation/salvage.
+│                                  # Everything DetectionSubagent needs to ask an LLM to
+│                                  # *explain* an already-made decision, and nothing that
+│                                  # decides is_anomalous/confidence/category.
 ├── classifier.py                 # tool layer: load artifacts, predict, per-tree vote spread,
 │                                  # top_features (feature-importance ranking), predict_attack_category
 ├── training/
 │   ├── data.py                   # shared loading/cleaning, the ONE train/test split (fixed
 │   │                              # random_state), feature stats, map_cicids_label_to_category
 │   ├── train_binary.py           # binary RandomForest (BENIGN vs anomalous) -> detection_binary.joblib
-│   └── train_category.py         # multiclass RandomForest, anomalous TRAIN rows only ->
-│                                  # detection_category.joblib
+│   └── train_category.py         # multiclass RandomForest (+ a downsampled Benign class),
+│                                  # anomalous TRAIN rows -> detection_category.joblib
 ├── train.py                      # thin wrapper: runs train_binary then train_category
 ├── mcp_server.py                 # MCP tool server exposing classifier.py to the LLM layer
 ├── llm_notes.py                  # LLM output schema, system prompt, validation/grounding checks
@@ -75,11 +82,15 @@ was never seen by either model:
 - **`train_binary.py`** trains the binary RandomForest (BENIGN vs anomalous) on the TRAIN split,
   prints a classification report + ROC-AUC, and saves `{model, feature_names, feature_medians,
   feature_mad}` to `detection_binary.joblib`.
-- **`train_category.py`** trains a *multiclass* RandomForest, restricted to the TRAIN split's
-  anomalous rows only, with labels mapped via `data.map_cicids_label_to_category` (CICIDS2017's
-  raw multiclass `Label` collapsed to a fixed category vocabulary — `DoS`, `DDoS`, `PortScan`,
-  `BruteForce`, `WebAttack`, `Botnet`, `Infiltration`, `Unknown`; `BENIGN`/unrecognized rows are
-  excluded from training entirely). Prints a per-class classification report, and saves
+- **`train_category.py`** trains a *multiclass* RandomForest on the TRAIN split's anomalous
+  rows, with labels mapped via `data.map_cicids_label_to_category` (CICIDS2017's raw multiclass
+  `Label` collapsed to a fixed category vocabulary — `DoS`, `DDoS`, `PortScan`, `BruteForce`,
+  `WebAttack`, `Botnet`, `Infiltration`, `Unknown`), **plus an explicit `classifier.BENIGN_CATEGORY`
+  ("Benign") class** built from BENIGN rows, downsampled to `DEFAULT_BENIGN_TO_ATTACK_RATIO`
+  (2.0) times the attack-row count so training stays fast — see "Category decision" below for
+  why Benign exists at all. Unrecognized labels are still excluded from training entirely.
+  Evaluated on the TEST split at its **real, undownsampled** class balance. Prints per-class
+  precision/recall/F1, row counts per class (train and test), and macro F1, then saves
   `{category_model, classes, feature_names}` to `detection_category.joblib`.
 
 Both artifacts store `feature_names`; `classifier.assert_feature_names_match` checks they're
@@ -201,7 +212,7 @@ came back reliably constrained to the exact enum, with no prompting trick needed
 `DETECTION_LLM_MODE=single_shot`:
 
 ```text
-DETECTION_LLM_MODE=agent (default)              DETECTION_LLM_MODE=single_shot
+DETECTION_LLM_MODE=agent                        DETECTION_LLM_MODE=single_shot
   ToolCallingAgent decides which tools            code calls top_features (+ tree_vote_spread
   to call, then must call final_answer            if borderline) directly via MCP, then ONE
   — reliable for hosted models with real           litellm.completion call with
@@ -210,16 +221,19 @@ DETECTION_LLM_MODE=agent (default)              DETECTION_LLM_MODE=single_shot
 ```
 
 Either way, the raw text goes through the exact same `parse_and_validate`/salvage pipeline in
-`_run_llm_layer` — `single_shot` is not a way to skip any guardrail, it only changes how the
-raw JSON gets produced. Set via `DETECTION_LLM_MODE=agent|single_shot` in `.env`; an
-unrecognized value silently falls back to `agent` rather than raising. `evaluate.py` records
-which mode ran in the `llm_mode` CSV column and prints it alongside the model id at startup.
+`LLMExplanationLayer._run_llm_layer` — `single_shot` is not a way to skip any guardrail, it only
+changes how the raw JSON gets produced. Set via `DETECTION_LLM_MODE=agent|single_shot` in
+`.env` to force one explicitly. Left unset (or an unrecognized value): `llm_layer.resolve_llm_mode`
+defaults to `single_shot` for any `ollama_chat/*` `DETECTION_LLM_MODEL`, `agent` otherwise —
+since `DETECTION_LLM_MODEL` itself defaults to a local Ollama model, the out-of-the-box default
+is `single_shot`. `evaluate.py` records which mode ran in the `llm_mode` CSV column and prints
+it alongside the model id at startup.
 
-**Recommendation:** for a hosted, capable model (Gemini), keep the default `agent` mode — it
-actually gets to use the multi-step tool-investigation loop as designed. For a local Ollama
-model (any size, this is a litellm↔Ollama limitation, not a model-capability one), use
-`DETECTION_LLM_MODE=single_shot` — the agent loop's reliance on `tool_choice` cannot work
-there.
+**Recommendation:** for a hosted, capable model (Gemini), use `DETECTION_LLM_MODE=agent`
+(or just don't set `DETECTION_LLM_MODEL` to an `ollama_chat/*` id) — it actually gets to use the
+multi-step tool-investigation loop as designed. For a local Ollama model (any size, this is a
+litellm↔Ollama limitation, not a model-capability one), `single_shot` is now the default and
+doesn't need setting explicitly — the agent loop's reliance on `tool_choice` cannot work there.
 
 ### Category decision: a deterministic tool, not the LLM
 
@@ -242,11 +256,23 @@ events rather than fixing anything general. Real fix: same principle as `is_anom
    `DetectionSubagent(category_confidence_threshold=...)`), that class is the chosen category.
    Otherwise the chosen category is `"Unknown"` — reporting a low-confidence guess as if it were
    solid is worse than admitting the model isn't sure.
-3. This is logged as its own trace step (`action="category_decision"`, `tool_input` carries
-   `chosen_category`, `raw_top_category`, `raw_top_probability`, and `threshold`) so
+3. **If the top class is `classifier.BENIGN_CATEGORY` ("Benign")**, the binary model (which
+   already called this event anomalous) and the category model disagree — the chosen category
+   is `"Unknown"` (never `"Benign"`, which would contradict `is_anomalous=True`), logged as its
+   own `action="model_disagreement"` trace step, and this overrides the confidence threshold
+   entirely: even a *high-confidence* Benign vote is a disagreement, not a trustworthy answer.
+   **Why Benign is a class at all:** an earlier version of the category model trained on attack
+   rows only, so it had no way to express "this doesn't look like an attack" — a real evaluation
+   run found 5 events the binary model wrongly flagged anomalous all got a confident attack
+   category anyway (Botnet 0.97-1.0 ×4, DoS 0.99), because that was the only kind of answer the
+   model could give. `evaluate.py`'s `compute_false_positive_categorization` (see below) is the
+   metric that would have caught this — `compute_category_report` never scores benign ground
+   truth, since it only looks at truly anomalous events.
+4. Otherwise: this is logged as its own trace step (`action="category_decision"`, `tool_input`
+   carries `chosen_category`, `raw_top_category`, `raw_top_probability`, and `threshold`) so
    `evaluate.py` can report both the thresholded decision and the classifier's raw top-1
    accuracy from the same run.
-4. No category model loaded (backward compatibility) → logged as `category_model_unavailable`,
+5. No category model loaded (backward compatibility) → logged as `category_model_unavailable`,
    category is always `"Unknown"`.
 
 The LLM never sees this as something to decide: its task prompt states the chosen category and
@@ -286,16 +312,16 @@ the main flow) — and don't affect validation or the fallback_reason.
 | LLM/MCP server hangs | Runs on a daemon thread with a wall-clock timeout (`llm_timeout_seconds`, default 20s, configurable — see Config below); a timeout falls back to a template note |
 | LLM loops forever calling tools | `ToolCallingAgent(max_steps=3)` — at most 3 tool calls per event |
 | Model cold start (subprocess spawn + first inference) eats into the first event's timeout | `warmup()` opens the connection and runs one tiny prompt before the timed run starts, retrying transient errors; `evaluate.py` calls it and reports the time separately |
-| Hosted provider (Gemini etc.) rate-limits or is briefly unavailable (429/5xx) | `_call_with_retry` retries with exponential backoff (2s/4s/8s, `LLM_RETRY_DELAYS_SECONDS`) inside the per-event timeout, both in `warmup()` and per event; exhausted retries are tagged `rate_limited`/`provider_unavailable`, distinct from a generic `exception`, and don't drop the MCP connection (the failure is provider-side, not the MCP subprocess) |
-| smolagents wraps the model-call failure in its own `AgentGenerationError` before we ever see it, hiding the real litellm error's `status_code` | `_classify_llm_error` walks `__cause__`/`__context__` (depth-limited, cycle-guarded) instead of only looking at the exception it's handed, and classifies on the first link that resolves |
-| smolagents' own built-in retryer (rate-limit-shaped errors only, ~60s+~120s of internal sleeping by default) would blow past our per-event timeout before ever raising — and does nothing for 5xx at all | `LiteLLMModel(..., retry=False)` in `_get_llm_model`: our `_call_with_retry` (bounded by the per-event timeout) is the single retry authority for both rate limits and provider-unavailable errors, see the comment on `_get_llm_model` |
+| Hosted provider (Gemini etc.) rate-limits or is briefly unavailable (429/5xx) | `llm_layer._call_with_retry` retries with exponential backoff (2s/4s/8s, `LLM_RETRY_DELAYS_SECONDS`) inside the per-event timeout, both in `warmup()` and per event; exhausted retries are tagged `rate_limited`/`provider_unavailable`, distinct from a generic `exception`, and don't drop the MCP connection (the failure is provider-side, not the MCP subprocess) |
+| smolagents wraps the model-call failure in its own `AgentGenerationError` before we ever see it, hiding the real litellm error's `status_code` | `llm_layer._classify_llm_error` walks `__cause__`/`__context__` (depth-limited, cycle-guarded) instead of only looking at the exception it's handed, and classifies on the first link that resolves |
+| smolagents' own built-in retryer (rate-limit-shaped errors only, ~60s+~120s of internal sleeping by default) would blow past our per-event timeout before ever raising — and does nothing for 5xx at all | `LiteLLMModel(..., retry=False)` in `LLMExplanationLayer._get_llm_model`: our `_call_with_retry` (bounded by the per-event timeout) is the single retry authority for both rate limits and provider-unavailable errors, see the comment on `_get_llm_model` |
 | Warmup itself fails (bad model id/API key, provider down) and would otherwise crash the eval run | `warmup()` never raises — returns `{"ok", "elapsed_seconds", "reason"}`; `evaluate.py` prints the reason and skips the `+LLM` arm cleanly, still printing/saving the RF-only results |
-| MCP connection dies mid-run (not a provider-side error) | The exception is caught in `_run_llm_layer`, logged, and disconnected immediately (thread already finished); that event falls back to a template note, `run()` never raises |
-| A timed-out call's connection can't be touched safely from the main thread (the abandoned thread may still be using it) | It's queued in `_abandoned_mcp_clients` instead of disconnected on the spot; `close()` disconnects it, and the abandoned thread disconnects it itself (in its own `finally`) once it notices it's no longer the active connection |
+| MCP connection dies mid-run (not a provider-side error) | The exception is caught in `LLMExplanationLayer._run_llm_layer`, logged, and disconnected immediately (thread already finished); that event falls back to a template note, `run()` never raises |
+| A timed-out call's connection can't be touched safely from the main thread (the abandoned thread may still be using it) | It's queued in `LLMExplanationLayer._abandoned_mcp_clients` instead of disconnected on the spot; `close()` disconnects it, and the abandoned thread disconnects it itself (in its own `finally`) once it notices it's no longer the active connection |
 | Repeated timeouts cascade into reconnect-then-timeout-again on every following event | Circuit breaker: after `circuit_breaker_threshold` (default 3) consecutive LLM failures, the LLM is skipped entirely (no more connection attempts) for the rest of the run, logged as `llm_circuit_open` |
-| An abandoned (timed-out) worker thread's `log_step` calls land in a *later* event's trace | The worker buffers its steps in a local list (`step_buffer`) instead of calling `self.log_step` directly; `_run_llm_layer` only replays that buffer into `self._trace` once it knows the call finished within the timeout — an abandoned call's buffer is simply never read |
+| An abandoned (timed-out) worker thread's `log_step` calls land in a *later* event's trace | The worker buffers its steps in a local list (`step_buffer`) instead of calling the stored `log_step` callback directly; `LLMExplanationLayer._run_llm_layer` only replays that buffer once it knows the call finished within the timeout — an abandoned call's buffer is simply never read |
 | Numpy scalars aren't JSON-serializable over the MCP wire | Features are cast to plain Python `float` before `register_event` (and in `classifier.top_features`'s returned `value`) |
-| Reopening the MCP subprocess (and reloading the ~68 MB model artifact) on every event | Connection is opened once, lazily, and reused across events (`_ensure_llm_connection`); only a lightweight `ToolCallingAgent` is rebuilt per event |
+| Reopening the MCP subprocess (and reloading the ~68 MB model artifact) on every event | Connection is opened once, lazily, and reused across events (`LLMExplanationLayer._ensure_llm_connection`); only a lightweight `ToolCallingAgent` is rebuilt per event |
 | LLM called on obviously benign traffic (cost/latency) | Only invoked when `p_anomalous >= 0.4` — clear benign events skip it entirely |
 | Public contract changes | `DetectionManager.run(event) -> DetectionResult` is unchanged; `use_llm` is an opt-in constructor flag, default `False` |
 
@@ -334,11 +360,11 @@ Configure the model via a `.env` file at the repo root (copy `.env.example`):
 
 ```sh
 cp .env.example .env
-ollama pull qwen2.5:7b   # or whatever model DETECTION_LLM_MODEL names
+ollama pull qwen2.5:3b   # or whatever model DETECTION_LLM_MODEL names
 ollama serve             # if not already running
 ```
 
-`DETECTION_LLM_MODEL` defaults to `ollama_chat/qwen2.5:7b` (local, no API key). To use
+`DETECTION_LLM_MODEL` defaults to `ollama_chat/qwen2.5:3b` (local, no API key). To use
 Gemini instead (as in the labs), set `DETECTION_LLM_MODEL=gemini/<model-id>` (check
 [ai.google.dev/gemini-api/docs/models](https://ai.google.dev/gemini-api/docs/models) for a
 current model id — these get retired) and `DETECTION_LLM_API_KEY=<your key>`. Gemini's free
@@ -349,11 +375,11 @@ with backoff, but for a full run at default settings also pass `--llm-delay` (se
 
 | Setting | Source (highest priority first) |
 |---|---|
-| Per-event LLM timeout | `DetectionManager(llm_timeout_seconds=...)` constructor arg → `DETECTION_LLM_TIMEOUT` env var → 20s default |
+| Per-event LLM timeout | `DetectionManager(llm_timeout_seconds=...)` constructor arg → `DETECTION_LLM_TIMEOUT` env var → 60s default |
 | Circuit breaker threshold | `DetectionManager(circuit_breaker_threshold=...)` constructor arg → 3 (default) |
-| Model id / API key | `DETECTION_LLM_MODEL` / `DETECTION_LLM_API_KEY` env vars (`.env`) — `evaluate.py` prints the resolved `DETECTION_LLM_MODEL` at startup |
-| LLM mode (`agent` vs `single_shot`) | `DETECTION_LLM_MODE` env var (`.env`); unrecognized value falls back to `agent` — see "Two LLM modes" above |
-| Retry backoff schedule (rate limit / 5xx) | `subagent.LLM_RETRY_DELAYS_SECONDS` (2s, 4s, 8s — 3 retries, 4 attempts total); not currently exposed via env var |
+| Model id / API key | `DETECTION_LLM_MODEL` / `DETECTION_LLM_API_KEY` env vars (`.env`) — `evaluate.py` prints the resolved `DETECTION_LLM_MODEL` at startup; defaults to `ollama_chat/qwen2.5:3b` |
+| LLM mode (`agent` vs `single_shot`) | `DETECTION_LLM_MODE` env var (`.env`) when set to a recognized value; otherwise defaults to `single_shot` for any `ollama_chat/*` model, `agent` otherwise (`llm_layer.resolve_llm_mode`) — see "Two LLM modes" above |
+| Retry backoff schedule (rate limit / 5xx) | `llm_layer.LLM_RETRY_DELAYS_SECONDS` (2s, 4s, 8s — 3 retries, 4 attempts total); not currently exposed via env var |
 
 ### Running the evaluation
 
@@ -421,6 +447,21 @@ category directly (validated against a fixed list/synonym table). A real run sco
 far too small to justify tuning the prompt further (that risks overfitting to those 8 events),
 and the LLM was never actually *choosing well* in the first place. See "Category decision"
 above for the fix and its results on the current (larger, RF-driven) evaluation.
+
+#### False-positive categorisation and model disagreement
+
+`compute_category_report` only ever looks at *truly anomalous* events (`true_label == 1`), so it
+can't see what happens on the binary model's false positives — genuinely benign traffic it
+wrongly called anomalous. `compute_false_positive_categorization` covers exactly that gap:
+among events with `true_label == 0` that the binary model still flagged anomalous, what
+percentage got a specific attack category rather than `"Unknown"`. This is the metric that
+surfaced the original bug (see "Category decision" above): before `train_category.py` had a
+Benign class, this was consistently well above 0%; after it, it should be ~0%, since the
+category model can now vote Benign on those events (triggering `model_disagreement` — see
+below) instead of always guessing an attack. `print_summary` prints it right after the category
+report, and `evaluate.py`'s CSV carries each row's `model_disagreement` flag (True when
+`_choose_category`'s top vote was Benign for that event) — the console summary also prints the
+total `model_disagreement_count` for the run.
 
 ## Dependencies
 

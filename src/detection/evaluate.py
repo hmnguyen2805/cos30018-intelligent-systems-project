@@ -32,8 +32,8 @@ from sklearn.metrics import accuracy_score, f1_score
 from sklearn.model_selection import train_test_split
 
 from src.detection import classifier
+from src.detection.llm_layer import FALLBACK_REASON_BY_ACTION, resolve_llm_mode, resolve_llm_model_id
 from src.detection.manager import DetectionManager
-from src.detection.subagent import FALLBACK_REASON_BY_ACTION, resolve_llm_mode, resolve_llm_model_id
 from src.detection.training import data
 from src.shared.schemas import TrafficEvent
 
@@ -119,15 +119,25 @@ def _llm_mode(trace) -> Optional[str]:
 
 
 def _category_decision(trace):
-    """The classifier's raw top-1 category + probability, from the
-    "category_decision" step _choose_category always logs for a truly
-    anomalous event — independent of use_llm/llm_invoked entirely, since the
-    category decision is deterministic and made by code either way."""
+    """The classifier's raw top-1 category + probability, from whichever
+    step _choose_category logged for a truly anomalous event —
+    "category_decision" (ordinary threshold decision) or
+    "model_disagreement" (category model's top vote was Benign, contradicting
+    the binary model) — independent of use_llm/llm_invoked entirely, since
+    the category decision is deterministic and made by code either way."""
     for step in trace:
-        if step.action == "category_decision":
+        if step.action in ("category_decision", "model_disagreement"):
             ti = step.tool_input or {}
             return ti.get("raw_top_category"), ti.get("raw_top_probability")
     return None, None
+
+
+def _model_disagreement(trace) -> bool:
+    """True when _choose_category found the category model's top vote was
+    Benign for an event the binary model already called anomalous — a
+    disagreement between the two models, distinct from an ordinary
+    below-threshold "Unknown" (see subagent.py._choose_category)."""
+    return any(step.action == "model_disagreement" for step in trace)
 
 
 def _llm_diagnostics(trace):
@@ -223,6 +233,38 @@ def print_category_report(report: dict) -> None:
         print(row)
 
 
+def compute_false_positive_categorization(rows: list) -> dict:
+    """Among events the binary model wrongly flagged anomalous
+    (true_label == 0, predicted == 1), how often the category decision still
+    handed out a specific attack category rather than "Unknown".
+
+    Before train_category.py trained on a Benign class, this was exactly the
+    gap a real run surfaced: 5 benign events the binary model false-positived
+    all got a confident attack category (Botnet 0.97-1.0 x4, DoS 0.99),
+    because the category model had no benign option to vote for and
+    compute_category_report never scores benign ground truth at all — this
+    metric is the one that would have caught it. Should be ~0% once the
+    Benign class (and model_disagreement) are in place.
+    """
+    false_positives = [r for r in rows if r["true_label"] == 0 and r["predicted"] == 1]
+    n = len(false_positives)
+    if n == 0:
+        return {"n": 0, "pct_given_specific_category": None}
+    given_specific_category = sum(
+        1 for r in false_positives if r["category"] not in (None, "Unknown")
+    )
+    return {"n": n, "pct_given_specific_category": given_specific_category / n * 100}
+
+
+def print_false_positive_report(report: dict) -> None:
+    if report["n"] == 0:
+        print("false-positive categorisation: no binary-model false positives in this sample")
+        return
+    print(f"false-positive categorisation (n={report['n']} events wrongly flagged anomalous by "
+          "the binary model):")
+    print(f"  % given a specific attack category: {report['pct_given_specific_category']:.1f}")
+
+
 def run_arm(manager: DetectionManager, events, labels, true_categories, llm_delay_seconds: float = 0.0):
     """Runs `manager` over every event, timing each call and recording
     whether the LLM layer fired, whether its output validated, and (when it
@@ -270,11 +312,14 @@ def run_arm(manager: DetectionManager, events, labels, true_categories, llm_dela
         step_failures, forced_final_answer = _llm_diagnostics(result.trace)
         mode = _llm_mode(result.trace)
 
+        disagreement = _model_disagreement(result.trace)
+
         rows.append({
             "true_label": int(label), "predicted": int(result.is_anomalous),
             "confidence": result.confidence, "llm_invoked": invoked, "llm_validated": validated,
             "llm_mode": mode, "category": category, "true_category": true_category,
             "raw_top_category": raw_top_category, "raw_top_probability": raw_top_probability,
+            "model_disagreement": disagreement,
             "fallback_reason": fallback_reason,
             "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens,
             "latency_ms": latencies_ms[-1],
@@ -294,6 +339,8 @@ def run_arm(manager: DetectionManager, events, labels, true_categories, llm_dela
         "category_distribution": {c: categories.count(c) for c in set(categories)},
         "fallback_reason_counts": dict(Counter(r for r in fallback_reasons if r)),
         "category_report": compute_category_report(rows),
+        "false_positive_report": compute_false_positive_categorization(rows),
+        "model_disagreement_count": sum(1 for r in rows if r["model_disagreement"]),
         "rows": rows,
     }
 
@@ -324,6 +371,9 @@ def print_summary(rf_only: dict, rf_llm: Optional[dict], sampling: str):
     # subagent.py._choose_category), so this is identical whether or not the LLM ran —
     # report it once, from the arm that's always available.
     print_category_report(rf_only["category_report"])
+    print_false_positive_report(rf_only["false_positive_report"])
+    print(f"model disagreement count (binary anomalous, category top vote Benign): "
+          f"{rf_only['model_disagreement_count']}")
 
 
 def save_csv(path: Path, rows: list):

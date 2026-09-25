@@ -46,6 +46,12 @@ CONTEXT_FEATURE_CANDIDATES = [
 
 _DEVIATION_SCALE_EPSILON = 1e-6
 
+# The category model's explicit "this looks benign" class (training/train_category.py). When
+# it's the top prediction for an event the binary model already called anomalous, the two
+# models disagree — subagent.py._choose_category reports "Unknown" rather than trusting either
+# side's specific label, and logs it as a distinct "model_disagreement" trace step.
+BENIGN_CATEGORY = "Benign"
+
 
 def load_artifact(path: str) -> dict:
     """Load an artifact saved by training/train_binary.py or

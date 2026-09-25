@@ -14,9 +14,8 @@ manager) to shut it down when done.
 """
 from typing import Optional
 
-from src.detection.subagent import (
-    DEFAULT_CATEGORY_CONFIDENCE_THRESHOLD, DEFAULT_CIRCUIT_BREAKER_THRESHOLD, DetectionSubagent,
-)
+from src.detection.llm_layer import DEFAULT_CIRCUIT_BREAKER_THRESHOLD
+from src.detection.subagent import DEFAULT_CATEGORY_CONFIDENCE_THRESHOLD, DetectionSubagent
 from src.shared.base import BaseAgent
 from src.shared.schemas import DetectionResult, TrafficEvent
 

@@ -85,6 +85,28 @@ def test_category_decision_returns_none_pair_when_absent():
     assert evaluate._category_decision(make_trace(("call_classifier", None, None))) == (None, None)
 
 
+def test_category_decision_reads_from_model_disagreement_step_too():
+    # The category model's top vote was Benign (subagent.py._choose_category) — no
+    # "category_decision" step at all, only "model_disagreement", but the raw top
+    # category/probability must still be readable from it.
+    trace = make_trace((
+        "model_disagreement",
+        {"chosen_category": "Unknown", "raw_top_category": "Benign", "raw_top_probability": 0.97},
+        None,
+    ))
+    assert evaluate._category_decision(trace) == ("Benign", 0.97)
+
+
+def test_model_disagreement_is_true_when_the_step_is_present():
+    trace = make_trace(("model_disagreement", {}, None))
+    assert evaluate._model_disagreement(trace) is True
+
+
+def test_model_disagreement_is_false_when_absent():
+    trace = make_trace(("category_decision", {}, None))
+    assert evaluate._model_disagreement(trace) is False
+
+
 def _make_event():
     return TrafficEvent(features={"duration": 1.0})
 
@@ -255,3 +277,68 @@ def test_run_arm_category_report_works_without_any_llm_dispatch():
     assert summary["category_report"]["n"] == 1
     assert summary["category_report"]["accuracy"] == 0.0
     assert summary["category_report"]["raw_accuracy"] == 1.0
+
+
+# --- compute_false_positive_categorization ------------------------------------
+# Before train_category.py trained a Benign class, a real run found 5 benign events
+# the binary model wrongly flagged anomalous all got a confident attack category
+# (Botnet/DoS) — compute_category_report never scores benign ground truth at all, so
+# that gap was invisible there. This metric is the one that would have caught it.
+
+def _fp_row(true_label=0, predicted=1, category=None):
+    return {"true_label": true_label, "predicted": predicted, "category": category}
+
+
+def test_false_positive_report_empty_when_no_false_positives():
+    rows = [_fp_row(true_label=0, predicted=0, category=None)]  # correctly called benign
+    report = evaluate.compute_false_positive_categorization(rows)
+    assert report["n"] == 0
+    assert report["pct_given_specific_category"] is None
+
+
+def test_false_positive_report_excludes_true_positives():
+    rows = [_fp_row(true_label=1, predicted=1, category="DDoS")]  # a real attack, not a FP
+    report = evaluate.compute_false_positive_categorization(rows)
+    assert report["n"] == 0
+
+
+def test_false_positive_report_counts_specific_categories_given_to_false_positives():
+    rows = [
+        _fp_row(category="Botnet"),   # false positive, given a specific attack category — the bug
+        _fp_row(category="Unknown"),  # false positive, correctly punted
+        _fp_row(category=None),       # false positive, no category model loaded
+    ]
+    report = evaluate.compute_false_positive_categorization(rows)
+    assert report["n"] == 3
+    assert report["pct_given_specific_category"] == pytest.approx(100 / 3)
+
+
+def test_false_positive_report_is_zero_after_the_benign_class_fix():
+    # The fix: category is always "Unknown" (or None) for a false positive once the category
+    # model has a Benign option to vote for — never a specific attack name.
+    rows = [_fp_row(category="Unknown"), _fp_row(category="Unknown")]
+    report = evaluate.compute_false_positive_categorization(rows)
+    assert report["pct_given_specific_category"] == 0.0
+
+
+def test_run_arm_records_model_disagreement_flag_and_false_positive_report():
+    trace = make_trace((
+        "model_disagreement",
+        {"chosen_category": "Unknown", "raw_top_category": "Benign", "raw_top_probability": 0.97},
+        None,
+    ))
+    result = DetectionResult(event=_make_event(), is_anomalous=True, confidence=0.9,
+                              detector_notes="[category=Unknown]", trace=trace)
+    manager = MagicMock()
+    manager.run.return_value = result
+
+    # true_label=0 (actually benign) but the binary model called it anomalous (is_anomalous=True
+    # on the mocked result) — a false positive the category model correctly punted on.
+    summary = evaluate.run_arm(manager, [_make_event()], [0], [None])
+
+    row = summary["rows"][0]
+    assert row["model_disagreement"] is True
+    assert row["category"] == "Unknown"
+    assert summary["model_disagreement_count"] == 1
+    assert summary["false_positive_report"]["n"] == 1
+    assert summary["false_positive_report"]["pct_given_specific_category"] == 0.0
