@@ -117,6 +117,44 @@ def test_split_train_test_is_stratified_on_the_binary_label():
     assert abs(train_attack_frac - test_attack_frac) < 0.05
 
 
+# --- split_validation ---------------------------------------------------------
+# Carved out of the TRAIN split (never TEST) for things like the offline
+# CATEGORY_CONFIDENCE_THRESHOLD sweep — a separate fixed random_state from
+# split_train_test, so it's an independent split.
+
+def test_split_validation_is_deterministic():
+    df = _make_df()
+    train_df, _ = data.split_train_test(df)
+    sub_a, val_a = data.split_validation(train_df)
+    sub_b, val_b = data.split_validation(train_df)
+    assert list(sub_a["x"]) == list(sub_b["x"])
+    assert list(val_a["x"]) == list(val_b["x"])
+
+
+def test_split_validation_rows_are_disjoint_and_complete_within_train():
+    df = _make_df()
+    train_df, _ = data.split_train_test(df)
+    sub_df, val_df = data.split_validation(train_df)
+    assert len(sub_df) + len(val_df) == len(train_df)
+    assert set(sub_df["x"]) & set(val_df["x"]) == set()
+
+
+def test_split_validation_never_overlaps_the_test_split():
+    df = _make_df()
+    train_df, test_df = data.split_train_test(df)
+    _, val_df = data.split_validation(train_df)
+    assert set(val_df["x"]) & set(test_df["x"]) == set()
+
+
+def test_split_validation_is_stratified_on_the_binary_label():
+    df = _make_df(n_benign=80, n_attack=20)
+    train_df, _ = data.split_train_test(df)
+    sub_df, val_df = data.split_validation(train_df)
+    sub_attack_frac = (sub_df["Label"] == "DDoS").mean()
+    val_attack_frac = (val_df["Label"] == "DDoS").mean()
+    assert abs(sub_attack_frac - val_attack_frac) < 0.05
+
+
 # --- map_cicids_label_to_category --------------------------------------------
 # The dataset's own labels, exactly as they appear in the cached CICIDS2017 CSVs
 # (verified against a real pull): ['BENIGN', 'Bot', 'DDoS', 'DoS GoldenEye', 'DoS Hulk',

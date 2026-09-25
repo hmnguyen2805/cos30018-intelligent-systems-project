@@ -18,6 +18,11 @@ Usage:
     python -m src.detection.evaluate [--sample-size 200] [--random-state 42]
                                       [--sampling random|borderline] [--llm-timeout 20]
                                       [--llm-delay 0]
+
+    python -m src.detection.evaluate --offline [--category-threshold 0.6]
+        Offline, no-LLM batch evaluation over the entire test split, plus a
+        CATEGORY_CONFIDENCE_THRESHOLD sweep on a validation split carved from
+        train — see offline_eval.py. Ignores every other flag above.
 """
 import argparse
 import csv
@@ -31,9 +36,10 @@ import numpy as np
 from sklearn.metrics import accuracy_score, f1_score
 from sklearn.model_selection import train_test_split
 
-from src.detection import classifier
+from src.detection import classifier, offline_eval
 from src.detection.llm_layer import FALLBACK_REASON_BY_ACTION, resolve_llm_mode, resolve_llm_model_id
 from src.detection.manager import DetectionManager
+from src.detection.subagent import DEFAULT_CATEGORY_CONFIDENCE_THRESHOLD
 from src.detection.training import data
 from src.shared.schemas import TrafficEvent
 
@@ -387,6 +393,17 @@ def save_csv(path: Path, rows: list):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--offline", action="store_true",
+                         help="Offline, no-LLM batch evaluation over the ENTIRE test split "
+                              "(binary + category classifier metrics, false-positive "
+                              "categorisation, model disagreement), plus a "
+                              "CATEGORY_CONFIDENCE_THRESHOLD sweep on a validation split carved "
+                              "from train. Ignores every other flag below.")
+    parser.add_argument("--category-threshold", type=float, default=DEFAULT_CATEGORY_CONFIDENCE_THRESHOLD,
+                         help="Only with --offline: threshold used for the main test-split report "
+                              f"(default: subagent.DEFAULT_CATEGORY_CONFIDENCE_THRESHOLD = "
+                              f"{DEFAULT_CATEGORY_CONFIDENCE_THRESHOLD}). The sweep itself always "
+                              "covers offline_eval.CATEGORY_THRESHOLD_SWEEP regardless of this flag.")
     parser.add_argument("--sample-size", type=int, default=200)
     parser.add_argument("--random-state", type=int, default=42,
                          help="Controls only the held-out SAMPLING step (which rows of the fixed "
@@ -399,6 +416,10 @@ def main():
                          help="Seconds to sleep after each event dispatched to the LLM — for "
                               "free-tier hosted-provider rate limits.")
     args = parser.parse_args()
+
+    if args.offline:
+        offline_eval.run_offline_evaluation(args.category_threshold)
+        return
 
     print(f"DETECTION_LLM_MODEL={resolve_llm_model_id()}  DETECTION_LLM_MODE={resolve_llm_mode()}")
 

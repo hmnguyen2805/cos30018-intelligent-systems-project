@@ -32,7 +32,9 @@ src/detection/
 ├── train.py                      # thin wrapper: runs train_binary then train_category
 ├── mcp_server.py                 # MCP tool server exposing classifier.py to the LLM layer
 ├── llm_notes.py                  # LLM output schema, system prompt, validation/grounding checks
-├── evaluate.py                   # RF-only vs RF+LLM ablation, category-accuracy report
+├── evaluate.py                   # RF-only vs RF+LLM ablation (sampled) + `--offline` CLI entry
+├── offline_eval.py               # batch (no-LLM, whole-test-split) classifier metrics and the
+│                                  # CATEGORY_CONFIDENCE_THRESHOLD sweep, used by --offline
 ├── requirements-detection.txt
 └── README.md
 ```
@@ -456,12 +458,52 @@ wrongly called anomalous. `compute_false_positive_categorization` covers exactly
 among events with `true_label == 0` that the binary model still flagged anomalous, what
 percentage got a specific attack category rather than `"Unknown"`. This is the metric that
 surfaced the original bug (see "Category decision" above): before `train_category.py` had a
-Benign class, this was consistently well above 0%; after it, it should be ~0%, since the
-category model can now vote Benign on those events (triggering `model_disagreement` — see
-below) instead of always guessing an attack. `print_summary` prints it right after the category
-report, and `evaluate.py`'s CSV carries each row's `model_disagreement` flag (True when
+Benign class, this was consistently well above 0%. Adding it (plus the class-weight fix) reduces
+this, but does not eliminate it — a real full-test-split run (see `--offline` below) still shows
+**79.4%** (304/383 false positives). `print_summary` prints it right after the category report,
+and `evaluate.py`'s CSV carries each row's `model_disagreement` flag (True when
 `_choose_category`'s top vote was Benign for that event) — the console summary also prints the
-total `model_disagreement_count` for the run.
+total `model_disagreement_count` for the run. The residual is not obviously a code bug: a binary
+false positive is, by definition, a feature vector the binary model itself found attack-shaped,
+so it isn't surprising the (separately-trained, similar-feature) category model often finds it
+resembles one specific attack pattern rather than voting Benign — tuning
+`benign_to_attack_ratio` or `CATEGORY_CONFIDENCE_THRESHOLD` further (see `--offline`'s sweep
+below) is the next lever, not something this evaluation script can decide on its own.
+
+### Offline evaluation: full-split batch metrics + threshold sweep
+
+```sh
+python -m src.detection.evaluate --offline [--category-threshold 0.6]
+```
+
+A different mode from everything above: no `DetectionManager`/`DetectionSubagent`, no per-event
+agent loop, no LLM at all — `offline_eval.py` batch-predicts both classifiers directly
+(`model.predict_proba` over the whole feature matrix at once) over the **entire TEST split**
+(hundreds of thousands of rows, not a sample), which is both simpler and far faster than looping
+`DetectionManager.run()` per event. It reports:
+
+- **binary classifier**: precision/recall/F1/ROC-AUC over the whole test split.
+- **category classifier**: per-class precision/recall/F1 (+ macro F1, row counts/support) on
+  true attacks the binary model also caught, at `--category-threshold` (default: the current
+  `CATEGORY_CONFIDENCE_THRESHOLD`).
+- **false-positive categorisation**: count + rate (see above).
+- **model disagreement count**: binary-anomalous events where the category model's top vote was
+  Benign.
+- **% Unknown among true attacks**: how often the thresholded decision punted.
+
+It then sweeps `CATEGORY_CONFIDENCE_THRESHOLD` over `offline_eval.CATEGORY_THRESHOLD_SWEEP`
+(0.5/0.6/0.7/0.8/0.9) — **on a VALIDATION split carved from TRAIN**
+(`data.split_validation`, a separate fixed random_state from `data.split_train_test`), never on
+TEST, so choosing a threshold never tunes on the data the report above is scored on. For each
+threshold it shows category accuracy and % Unknown on true attacks, plus the false-positive
+categorisation rate, prints the table, and saves it to
+`src/detection/results/category_threshold_sweep.csv` (gitignored). It then **prints** (never
+applies) a recommended threshold — the sweep row maximizing validation category accuracy, ties
+broken by the lower false-positive rate, then by the higher (more conservative) threshold — and
+reports that recommended threshold's category accuracy / % Unknown / FP rate on TEST, for
+comparison against the `--category-threshold` report above.
+`subagent.DEFAULT_CATEGORY_CONFIDENCE_THRESHOLD` is never changed automatically by this script —
+the recommendation is informational.
 
 ## Dependencies
 
