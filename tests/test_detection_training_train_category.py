@@ -108,3 +108,40 @@ def test_build_category_training_set_downsampling_is_deterministic_given_a_rando
         df, FEATURE_NAMES, include_benign=True, benign_to_attack_ratio=2.0, random_state=7,
     )
     assert list(y1) == list(y2)
+
+
+# --- class weighting: plain "balanced" would flatten Benign back down --------
+# A real evaluation run found that even after adding a Benign class, class_weight="balanced"
+# gave Benign the same tiny per-class weight as every other class regardless of its (deliberately
+# dominant, per benign_to_attack_ratio) row count — undoing the whole point of downsampling it to
+# dominate rather than match a single attack class's count.
+
+def test_class_weights_gives_benign_full_weight_not_balanced_against_attack_classes():
+    # Benign (600 rows) massively outnumbers every attack class here — plain "balanced" would
+    # give it the smallest weight of anyone; the fix must give it weight 1.0 regardless of count.
+    y = np.array(
+        [classifier.BENIGN_CATEGORY] * 600
+        + ["DDoS"] * 100 + ["Botnet"] * 10 + ["Infiltration"] * 2
+    )
+    weights = train_category._class_weights(y)
+    assert weights[classifier.BENIGN_CATEGORY] == 1.0
+
+
+def test_class_weights_still_balances_rare_attack_classes_against_common_ones():
+    y = np.array(
+        [classifier.BENIGN_CATEGORY] * 600
+        + ["DDoS"] * 100 + ["Infiltration"] * 2
+    )
+    weights = train_category._class_weights(y)
+    # Infiltration is rarer than DDoS among the ATTACK classes -> higher weight, same as
+    # ordinary "balanced" would give it if Benign weren't in the picture at all.
+    assert weights["Infiltration"] > weights["DDoS"]
+
+
+def test_class_weights_falls_back_to_plain_balanced_with_no_benign_rows():
+    # build_category_training_set(include_benign=False) — the pre-Benign call shape — must
+    # behave exactly as class_weight="balanced" always did.
+    y = np.array(["DDoS"] * 100 + ["Infiltration"] * 2)
+    weights = train_category._class_weights(y)
+    assert weights["Infiltration"] > weights["DDoS"]
+    assert classifier.BENIGN_CATEGORY not in weights

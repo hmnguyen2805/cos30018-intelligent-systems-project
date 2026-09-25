@@ -127,3 +127,22 @@ def split_train_test(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         np.arange(len(df)), test_size=SPLIT_TEST_SIZE, stratify=y_binary, random_state=SPLIT_RANDOM_STATE,
     )
     return df.iloc[train_idx].reset_index(drop=True), df.iloc[test_idx].reset_index(drop=True)
+
+
+VALIDATION_RANDOM_STATE = 123
+VALIDATION_SIZE = 0.2
+
+
+def split_validation(train_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Carve a validation set out of the TRAIN split — never the test split —
+    for things like selecting CATEGORY_CONFIDENCE_THRESHOLD without tuning on
+    test data (evaluate.py --offline's threshold sweep). Uses a separate
+    fixed random_state from split_train_test, so this is independent of (and
+    reproducible alongside) the main split; call it on the train_df that
+    split_train_test already returned, not on the full dataset."""
+    y_binary = binarize_labels(train_df[LABEL_COL])
+    train_idx, val_idx = train_test_split(
+        np.arange(len(train_df)), test_size=VALIDATION_SIZE, stratify=y_binary,
+        random_state=VALIDATION_RANDOM_STATE,
+    )
+    return train_df.iloc[train_idx].reset_index(drop=True), train_df.iloc[val_idx].reset_index(drop=True)

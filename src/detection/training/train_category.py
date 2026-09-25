@@ -39,6 +39,7 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, f1_score
+from sklearn.utils.class_weight import compute_class_weight
 
 from src.detection import classifier
 from src.detection.training import data
@@ -96,9 +97,41 @@ def build_category_training_set(
     return X, y.to_numpy()
 
 
+def _class_weights(y) -> dict:
+    """sklearn's class_weight="balanced" gives every class equal TOTAL vote
+    weight (n_c * w_c is the same for every class) — exactly what rare attack
+    types like Infiltration need against common ones like DoS, but applied to
+    Benign too it silently undoes build_category_training_set's deliberate
+    benign_to_attack_ratio: Benign is downsampled to *dominate* (e.g. 2x the
+    total attack count) specifically so the model has ample benign evidence,
+    and "balanced" would flatten that back down to "one class among nine",
+    the same as Botnet's 1,564 rows — which is exactly how a real evaluation
+    run still handed confident attack categories to benign false positives
+    even after Benign was added as a class (see the module docstring).
+
+    Fix: compute "balanced" weights among the ATTACK classes only (so rare
+    attacks stay fairly represented against common ones), then give Benign a
+    weight of 1.0 — since attack-only "balanced" weights average to 1.0 by
+    construction, this keeps Benign's total vote weight proportional to its
+    actual (downsampled-but-still-dominant) row count, not artificially
+    flattened to match a single attack class."""
+    is_benign = y == classifier.BENIGN_CATEGORY
+    if not is_benign.any():
+        return dict(zip(*_balanced(y)))
+    attack_classes, attack_weights = _balanced(y[~is_benign])
+    weights = dict(zip(attack_classes, attack_weights))
+    weights[classifier.BENIGN_CATEGORY] = 1.0
+    return weights
+
+
+def _balanced(y):
+    classes = np.unique(y)
+    return classes, compute_class_weight("balanced", classes=classes, y=y)
+
+
 def train_category_model(X, y, random_state: int = 42) -> RandomForestClassifier:
     model = RandomForestClassifier(
-        n_estimators=100, class_weight="balanced", random_state=random_state, n_jobs=-1
+        n_estimators=100, class_weight=_class_weights(y), random_state=random_state, n_jobs=-1
     )
     model.fit(X, y)
     return model
