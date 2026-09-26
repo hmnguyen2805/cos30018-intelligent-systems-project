@@ -1,10 +1,7 @@
 """
-Shared data loading, cleaning, and — critically — the ONE train/test split
-every training script and evaluate.py must use. A fixed, non-parameterized
-random_state: this is the split that decides which rows either model can
-ever be trained on, so it can't silently drift between train_binary.py,
-train_category.py, and evaluate.py. If it did, evaluate.py could end up
-"testing" on a row one of the models was actually trained on.
+Shared data loading/cleaning, and the ONE train/test split every training
+script and evaluate.py must use (fixed, non-parameterized random_state) —
+so no script can accidentally test on a row another model trained on.
 """
 import glob
 import os
@@ -19,10 +16,8 @@ LABEL_COL = "Label"
 SPLIT_RANDOM_STATE = 42
 SPLIT_TEST_SIZE = 0.2
 
-# The fixed attack-category vocabulary the category model is trained to predict (see
-# train_category.py) and the LLM layer explains (see llm_notes.py) — "Unknown" covers both a
-# low-confidence classifier decision (subagent.py) and Heartbleed, which has no category of its
-# own here (see map_cicids_label_to_category below).
+# The fixed attack-category vocabulary the category model predicts (train_category.py).
+# "Unknown" covers both a low-confidence decision (subagent.py) and Heartbleed (see below).
 ALLOWED_CATEGORIES = [
     "DoS", "DDoS", "PortScan", "BruteForce", "WebAttack", "Botnet", "Infiltration", "Unknown",
 ]
@@ -48,11 +43,8 @@ _CICIDS_LABEL_TO_CATEGORY = {
 
 
 def map_cicids_label_to_category(raw_label) -> Optional[str]:
-    """Map one CICIDS2017 `Label` value to the fixed category vocabulary
-    (ALLOWED_CATEGORIES). Returns None for BENIGN and for any label this
-    mapping doesn't recognize — both mean "not a true-positive attack
-    category to score/train against", so train_category.py and evaluate.py
-    exclude them the same way."""
+    """Map one CICIDS2017 Label to ALLOWED_CATEGORIES. None for BENIGN and
+    any unrecognized label — both excluded from category scoring/training."""
     if not isinstance(raw_label, str):
         return None
     normalized = raw_label.strip().lower()
@@ -93,12 +85,9 @@ def select_feature_names(df: pd.DataFrame, label_col: str = LABEL_COL) -> List[s
 
 
 def compute_feature_stats(df: pd.DataFrame, feature_names: List[str]) -> Tuple[dict, dict]:
-    """Per-feature median and MAD (median absolute deviation), computed from
-    `df` (train_binary.py passes the TRAIN split only — no test-set
-    leakage). Saved in the binary artifact alongside the model so
-    classifier.top_features can rank a feature by how unusual THIS event's
-    value is, and show whether it's above/below/near normal without the LLM
-    doing arithmetic itself."""
+    """Per-feature median and MAD, computed from `df` (train_binary.py
+    passes TRAIN only, no test-set leakage) — used by classifier.top_features
+    to rank how unusual an event's value is."""
     medians = {name: float(df[name].median()) for name in feature_names}
     mad = {name: float((df[name] - medians[name]).abs().median()) for name in feature_names}
     return medians, mad
@@ -116,12 +105,9 @@ def load_clean_dataframe() -> pd.DataFrame:
 
 
 def split_train_test(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """THE train/test split. train_binary.py, train_category.py, and
-    evaluate.py all call this — never their own train_test_split on the raw
-    data — so a row that lands in the test half here is guaranteed to have
-    been in neither model's training data. Stratified on the binary label;
-    SPLIT_RANDOM_STATE/SPLIT_TEST_SIZE are module constants, not parameters,
-    so this can't be called with a different split by accident."""
+    """THE train/test split — every training script and evaluate.py must
+    call this, never their own train_test_split, so no row is ever tested
+    on by a model that trained on it. Stratified on the binary label."""
     y_binary = binarize_labels(df[LABEL_COL])
     train_idx, test_idx = train_test_split(
         np.arange(len(df)), test_size=SPLIT_TEST_SIZE, stratify=y_binary, random_state=SPLIT_RANDOM_STATE,
@@ -134,12 +120,9 @@ VALIDATION_SIZE = 0.2
 
 
 def split_validation(train_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Carve a validation set out of the TRAIN split — never the test split —
-    for things like selecting CATEGORY_CONFIDENCE_THRESHOLD without tuning on
-    test data (evaluate.py --offline's threshold sweep). Uses a separate
-    fixed random_state from split_train_test, so this is independent of (and
-    reproducible alongside) the main split; call it on the train_df that
-    split_train_test already returned, not on the full dataset."""
+    """Carve a validation set out of TRAIN (never TEST), e.g. for the
+    threshold sweep in evaluate.py --offline. Call on the train_df
+    split_train_test returned, not the full dataset."""
     y_binary = binarize_labels(train_df[LABEL_COL])
     train_idx, val_idx = train_test_split(
         np.arange(len(train_df)), test_size=VALIDATION_SIZE, stratify=y_binary,

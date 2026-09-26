@@ -1,32 +1,19 @@
 """
 Detection Subagent — decides whether a TrafficEvent looks anomalous.
 
-The baseline RandomForest (classifier.py) is a tool the agent calls, not the
-agent itself. On a borderline confidence score, the agent re-examines via
-per-tree vote spread (a second, finer-grained tool call) before finalizing —
-that borderline-handling loop is what makes this an agent rather than a
-single classifier call.
+classifier.py's baseline RandomForest is a tool the agent calls, not the
+agent itself: on a borderline score it re-examines via per-tree vote spread
+before finalizing. It also deterministically chooses an attack category —
+never the LLM, same principle as is_anomalous/confidence. See
+docs/architecture.md (category decision) and docs/design-decisions.md for
+the algorithm and why it isn't an LLM output.
 
-For every truly anomalous event, code ALSO decides an attack category —
-classifier.predict_attack_category (the multiclass model, trained on
-anomalous TRAIN rows plus a downsampled Benign class — see
-training/train_category.py) gives per-category probabilities; the top class
-is used if its probability clears CATEGORY_CONFIDENCE_THRESHOLD, else
-"Unknown". If the top class is classifier.BENIGN_CATEGORY, the binary and
-category models disagree (binary says anomalous, category says benign) —
-reported as "Unknown" and logged as a distinct "model_disagreement" trace
-step, never as a specific attack category. This whole decision is
-deterministic and independent of use_llm — same principle as
-is_anomalous/confidence, computed by code, never the LLM.
+Optionally (use_llm=True), a bounded LLM loop (llm.layer.LLMExplanationLayer)
+writes a grounded explanation of the already-chosen category; its output
+schema has no category field, so it cannot override the decision. See
+docs/llm-layer.md for the guardrails.
 
-Optionally (`use_llm=True`), a bounded LLM loop (llm.layer.LLMExplanationLayer)
-then writes a short, grounded explanation of that already-chosen category for
-detector_notes; the LLM's output schema has no category field at all, so it
-structurally cannot override the decision. Any invalid, ungrounded, timed-out,
-or errored LLM output falls back to a template explanation (the category tag
-is unaffected either way). See README.md's guardrails table for the full list.
-
-Owned by the Detection Manager (manager.py), which delegates each event here.
+Owned by DetectionManager, which delegates each event here.
 """
 from typing import Optional, Tuple
 
@@ -40,12 +27,8 @@ BORDERLINE_LOW = 0.4
 BORDERLINE_HIGH = 0.6
 DISAGREEMENT_THRESHOLD = 0.15  # tree-vote std above this = low ensemble consensus
 
-# Below this, classifier.predict_attack_category's top class isn't trusted and code reports
-# "Unknown" instead of a possibly-wrong specific category. Same role as the borderline band
-# above, but for the category decision rather than is_anomalous. Set from
-# evaluation/offline.py's --offline threshold sweep: the highest swept threshold whose validation
-# category accuracy on true attacks cleared 0.99 (see README's "Category decision" section for
-# the full sweep and the false-positive-categorisation tradeoff this threshold doesn't fully fix).
+# Below this, the category model's top class isn't trusted and code reports "Unknown" instead.
+# Default chosen by the threshold sweep — see docs/evaluation.md.
 DEFAULT_CATEGORY_CONFIDENCE_THRESHOLD = 0.9
 CATEGORY_TOP_K = 3
 
@@ -77,12 +60,8 @@ class DetectionSubagent(BaseAgent):
 
     @staticmethod
     def _load_category_artifact(category_model_path: Optional[str]) -> Optional[dict]:
-        """Best-effort: the category model is optional, for backward
-        compatibility with an install that only ever ran train_binary.py (or
-        an artifact saved before train_category.py existed). When it's
-        unavailable, _choose_category always falls back to "Unknown" rather
-        than raising — the same "degrade gracefully" pattern as
-        feature_medians/feature_mad on the binary artifact."""
+        """Load the category model, or None if absent — kept optional for
+        backward compatibility with an install that never trained one."""
         try:
             artifact = classifier.load_artifact(category_model_path or classifier.DEFAULT_CATEGORY_MODEL_PATH)
         except FileNotFoundError:
@@ -104,15 +83,16 @@ class DetectionSubagent(BaseAgent):
         self._llm.close()
 
     def warmup(self) -> dict:
-        """Open the MCP connection and prime the LLM before a run, outside
-        any per-event timeout. No-op success ({"ok": True, "elapsed_seconds":
-        0.0, "reason": None}) when use_llm is False. See
-        LLMExplanationLayer.warmup for the retry/never-raises contract."""
+        """Open the MCP connection and prime the LLM before a run. No-op
+        success when use_llm is False. See LLMExplanationLayer.warmup."""
         if not self.use_llm:
             return {"ok": True, "elapsed_seconds": 0.0, "reason": None}
         return self._llm.warmup()
 
     def run(self, input_data: TrafficEvent) -> DetectionResult:
+        """Classify one event: is_anomalous/confidence come from
+        classifier.py only; category and (if enabled) the LLM explanation
+        only ever affect detector_notes."""
         event = input_data
         self._trace = []  # fresh trace per event
 
@@ -146,9 +126,7 @@ class DetectionSubagent(BaseAgent):
             else:
                 notes = f"Borderline call, trees agree (std={vote_std:.3f}) — trusting vote fraction."
 
-        # is_anomalous and confidence are final here — computed purely from classifier.py's
-        # outputs. Nothing below this line may change either value; the category decision and
-        # the LLM (if it runs) only affect detector_notes.
+        # Final: nothing below this line may change is_anomalous/confidence.
         is_anomalous = final_p >= 0.5
         confidence = final_p if is_anomalous else 1.0 - final_p
 
@@ -177,23 +155,10 @@ class DetectionSubagent(BaseAgent):
         )
 
     def _choose_category(self, event: TrafficEvent) -> Tuple[str, Optional[float]]:
-        """Deterministic category decision — same principle as
-        is_anomalous/confidence: code, not the LLM, decides. Returns
-        (category, top_probability) where top_probability is the category
-        model's own confidence in its raw top class (None if no category
-        model is loaded). Below CATEGORY_CONFIDENCE_THRESHOLD, the top class
-        isn't trusted and "Unknown" is reported instead of a possibly-wrong
-        specific category — top_probability is still returned either way, so
-        callers (evaluate.py) can compare the thresholded decision against
-        the classifier's raw top-1 accuracy.
-
-        If the top class is classifier.BENIGN_CATEGORY, the binary model
-        (which already called this event anomalous) and the category model
-        disagree — reported as "Unknown" (never as "Benign", which would
-        contradict is_anomalous=True) and logged as its own
-        "model_disagreement" trace step, distinct from an ordinary
-        below-threshold "Unknown": the category model isn't just unsure
-        here, it's actively voting the other way."""
+        """Deterministically choose the attack category (never the LLM).
+        Returns (category, top_probability) — top_probability is returned
+        even when the result is "Unknown", so callers can compare against
+        the raw top-1 class. See docs/architecture.md (category decision)."""
         if self._category_artifact is None:
             self.log_step(
                 thought="No category model loaded — reporting category as Unknown.",
@@ -244,13 +209,9 @@ class DetectionSubagent(BaseAgent):
         self, event: TrafficEvent, p_anomalous: float, vote_std: Optional[float],
         deterministic_notes: Optional[str], chosen_category: str, category_probability: Optional[float],
     ) -> str:
-        """Return the detector_notes text after attempting the LLM layer:
-        `[category=X] explanation` (plus the deterministic borderline note,
-        if any) either way — X is always `chosen_category` (code's decision,
-        made before this runs); only the explanation text depends on the
-        LLM succeeding. Never raises: LLMExplanationLayer.explain() itself
-        never raises, and returns None on any failure (circuit open,
-        timeout, error, invalid/ungrounded output)."""
+        """Return detector_notes after attempting the LLM layer:
+        "[category=X] explanation", X always the pre-decided category.
+        Never raises — explain() falls back to a template note on failure."""
         llm_result = self._llm.explain(event, p_anomalous, vote_std, chosen_category, category_probability)
         explanation = llm_result["explanation"] if llm_result is not None else build_template_note(vote_std)
 

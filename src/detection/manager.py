@@ -49,13 +49,12 @@ class DetectionManager(BaseAgent):
         self._subagent.close()
 
     def warmup(self) -> dict:
-        """Open the MCP connection and prime the LLM before a run, outside
-        any per-event timeout. Retries transient provider errors with
-        backoff but never raises. No-op success when use_llm is False.
-        Returns {"ok": bool, "elapsed_seconds": float, "reason": str | None}."""
+        """Open the MCP connection and prime the LLM before a run, outside any
+        per-event timeout. Never raises; no-op success when use_llm is False."""
         return self._subagent.warmup()
 
     def run(self, input_data: TrafficEvent) -> DetectionResult:
+        """Delegate to DetectionSubagent and return its result."""
         self._trace = []
         self.log_step(thought="Delegate to Detection Subagent.", action="delegate_to_subagent")
         return self._subagent.run(input_data)

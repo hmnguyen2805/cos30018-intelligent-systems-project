@@ -1,25 +1,18 @@
 """
 LLM explanation layer — everything that talks to an LLM to explain an
 already-decided (by code) anomalous event: the persistent MCP connection,
-the agent/single_shot dispatch paths, retry/backoff on transient provider
-errors, the circuit breaker, and the validation/salvage pipeline.
+the agent/single_shot dispatch paths, retry/backoff, the circuit breaker,
+and the validation/salvage pipeline. See docs/llm-layer.md for guardrails,
+config, and troubleshooting, and docs/architecture.md for the flow diagram.
 
-DetectionSubagent (subagent.py) owns the actual detection decisions
-(is_anomalous, confidence, category) and only ever asks this layer for an
-*explanation* of a decision it already made — LLMExplanationLayer.explain()
-returns a validated {"explanation", "tools_used"} dict, or None on any
-failure (circuit open, timeout, error, invalid/ungrounded output), and the
-caller falls back to a template note either way. It never gets to change
-is_anomalous, confidence, or category — see llm.notes.ANSWER_JSON_SCHEMA,
-which has no fields for any of those.
+explain() returns a validated {"explanation", "tools_used"} dict, or None on
+any failure; the caller (subagent.py) falls back to a template note either
+way. It can never change is_anomalous, confidence, or category — see
+llm.notes.ANSWER_JSON_SCHEMA, which has no fields for any of those.
 
-The MCP connection (a subprocess that loads the model artifacts) is opened
-lazily on first use and reused across events — call warmup() once before a
-run (outside any per-event timeout) and close() (or use as a context
-manager) when done. If the connection dies mid-call, that event falls back
-to a template note; repeated failures trip the circuit breaker, which skips
-the LLM entirely for the rest of the run rather than reconnecting (and
-re-paying a slow model cold-start) on every following event.
+The MCP connection is opened lazily and reused across events — call
+warmup() once before a run and close() (or use as a context manager) when
+done.
 """
 import os
 import sys
@@ -45,15 +38,11 @@ DEFAULT_LLM_TIMEOUT_SECONDS = 60.0
 DEFAULT_LLM_MODEL = "ollama_chat/qwen2.5:3b"
 DEFAULT_CIRCUIT_BREAKER_THRESHOLD = 3
 
-# "agent": ToolCallingAgent loop (default) — for models that reliably honor tool_choice, e.g.
-# hosted ones like Gemini. "single_shot": code calls top_features (and tree_vote_spread, if
-# borderline) via MCP directly, then makes ONE LLM call with response_format's json_schema —
-# the reliable path for small local models. See litellm's ollama transformation, which drops
-# tool_choice entirely ("causes ollama requests to hang"): nothing can force those models
-# through the agent loop's "every step is a tool call" requirement, but response_format's
-# json_schema is honored (verified against ollama_chat/qwen2.5:3b — Ollama constrains output
-# to the schema via grammar-constrained decoding). resolve_llm_mode() defaults to single_shot
-# for any ollama_chat/* model (see below) — DEFAULT_LLM_MODE is only the non-Ollama default.
+# "agent": ToolCallingAgent loop (default, for models with real tool_choice support).
+# "single_shot": one direct call with a JSON-schema response_format instead — litellm's ollama
+# transformation drops tool_choice entirely, so this is the reliable path for local Ollama
+# models. resolve_llm_mode() defaults to single_shot for ollama_chat/* regardless of this
+# constant. See docs/design-decisions.md (agent vs single_shot).
 DEFAULT_LLM_MODE = "agent"
 GROUNDING_TOP_K = 5  # feature count used both to ground the LLM and to check its explanation
 RAW_OUTPUT_LOG_CHARS = 500  # truncation length for raw LLM text logged into the trace/CSV
@@ -76,20 +65,12 @@ FALLBACK_REASON_BY_ACTION = {
     "llm_validation_salvaged": "salvaged",
 }
 
-# Tools the LLM agent is allowed to call. predict_proba_anomalous is deliberately excluded:
-# code already computes p_anomalous and puts it in the task, so exposing it just wastes a
-# tool-call step on a small/slow model; it stays on the MCP server for completeness/tests.
-# predict_attack_category IS exposed (agent mode only — single_shot never calls MCP tools
-# itself): the LLM may investigate it for its own explanation, but code has already made the
-# actual category decision directly via classifier.predict_attack_category before the LLM
-# ever runs, so calling this tool cannot change detector_notes' category.
-# tree_vote_spread is only offered when the event is borderline (vote_std is not None) —
-# it's not meaningful otherwise, since the subagent itself never computed it.
+# Tools never offered to the LLM agent: register_event/clear_event are code-only, and
+# predict_proba_anomalous is redundant (code already has p_anomalous). See docs/architecture.md
+# (MCP server's role) for the full tool list and why each is or isn't exposed.
 LLM_HIDDEN_TOOL_NAMES = {"register_event", "clear_event", "predict_proba_anomalous"}
 
-# Retry-with-backoff schedule for transient LLM-provider errors (rate limits, 5xx,
-# connection/timeout issues) — used by both warmup() and per-event calls. 3 retries
-# at 2s/4s/8s, i.e. up to 4 attempts total.
+# Backoff schedule for transient LLM-provider errors — used by warmup() and per-event calls.
 LLM_RETRY_DELAYS_SECONDS = (2.0, 4.0, 8.0)
 
 _RATE_LIMIT_STATUS_CODES = {429}
@@ -113,14 +94,9 @@ def resolve_llm_model_id() -> str:
 
 
 def resolve_llm_mode() -> str:
-    """DETECTION_LLM_MODE env var ("agent" or "single_shot") wins when set to a
-    recognized value. Otherwise the default depends on the resolved model: any
-    ollama_chat/* model defaults to single_shot (litellm's ollama transformation
-    drops tool_choice entirely, so the agent loop can't be forced onto it — see
-    the module docstring / README's "Two LLM modes"); anything else defaults to
-    DEFAULT_LLM_MODE ("agent"). An unrecognized DETECTION_LLM_MODE value falls
-    back to this same model-based default rather than raising — resolving
-    config must never be a way for the LLM layer to break run()."""
+    """DETECTION_LLM_MODE env var when recognized; otherwise single_shot for
+    an ollama_chat/* model, else DEFAULT_LLM_MODE. Never raises on an
+    unrecognized value — falls back to the same model-based default."""
     mode = os.environ.get("DETECTION_LLM_MODE")
     if mode in ("agent", "single_shot"):
         return mode
@@ -128,20 +104,11 @@ def resolve_llm_mode() -> str:
 
 
 def _classify_llm_error(exc: BaseException) -> Optional[str]:
-    """Classify an exception raised by an LLM call as a transient, retryable
-    provider-side failure: "rate_limited" (HTTP 429), "provider_unavailable"
-    (5xx / connection / timeout), or None (not recognized as transient — e.g.
-    a bad API key, an MCP-side failure, or a programming error).
-
-    smolagents wraps whatever the model call raises in its own
-    AgentGenerationError (`raise AgentGenerationError(...) from e` in
-    smolagents/agents.py) — the wrapper itself has no status_code and its
-    name matches none of our keywords, so classifying it directly always
-    returned None even for a real, retryable provider error. The actual
-    litellm/HTTP exception (with its status_code) is one level down, in
-    `__cause__`. So: walk the __cause__ / __context__ chain — bounded by
-    _MAX_ERROR_CHAIN_DEPTH and a seen-ids guard against a circular chain —
-    and classify on the first link that isn't None."""
+    """Classify as "rate_limited", "provider_unavailable", or None (not a
+    recognized transient error). smolagents re-raises the real litellm/HTTP
+    error as its own AgentGenerationError, so the status_code we need is in
+    __cause__, not on `exc` itself — walk that chain (depth-limited,
+    cycle-guarded) instead of only checking `exc`."""
     current = exc
     seen_ids = set()
     for _ in range(_MAX_ERROR_CHAIN_DEPTH):
@@ -158,11 +125,9 @@ def _classify_llm_error(exc: BaseException) -> Optional[str]:
 
 
 def _classify_single_llm_error(exc: BaseException) -> Optional[str]:
-    """Classify one exception in isolation, ignoring __cause__/__context__ —
-    the actual status_code / exception-name check. litellm's exceptions
-    (which mirror openai's) all carry a status_code for HTTP-backed errors;
-    the exception class name is a fallback for connection-style errors that
-    might not set one consistently across providers/versions."""
+    """Classify one exception in isolation (no __cause__/__context__ walk) by
+    status_code, falling back to a class-name keyword match for
+    connection-style errors that don't set one consistently."""
     status_code = getattr(exc, "status_code", None)
     if status_code in _RATE_LIMIT_STATUS_CODES:
         return "rate_limited"
@@ -179,12 +144,10 @@ def _classify_single_llm_error(exc: BaseException) -> Optional[str]:
 
 
 def _call_with_retry(fn, on_retry=None, delays=LLM_RETRY_DELAYS_SECONDS):
-    """Call fn(), retrying with exponential backoff on a transient LLM-provider
-    error (see _classify_llm_error), up to len(delays) retries (len(delays) + 1
-    attempts total). Raises the last exception once retries are exhausted, or
-    immediately if the error isn't classified as transient. on_retry(attempt_
-    number, delay_seconds, reason), if given, fires right before each sleep —
-    callers use it to log without assuming which thread this runs on."""
+    """Call fn(), retrying with backoff on a transient error (see
+    _classify_llm_error); raises immediately on a non-transient error or once
+    retries are exhausted. on_retry(attempt_number, delay_seconds, reason)
+    fires before each sleep, if given."""
     for attempt in range(len(delays) + 1):
         try:
             return fn()
@@ -201,15 +164,9 @@ def _call_with_retry(fn, on_retry=None, delays=LLM_RETRY_DELAYS_SECONDS):
 
 class LLMExplanationLayer:
     """Owns the MCP connection, the agent/single_shot dispatch, retries, and
-    the circuit breaker. Constructed once per DetectionSubagent (not per
-    event) and reused across events — see the module docstring.
-
-    `log_step` is the owning subagent's `BaseAgent.log_step` bound method,
-    called once at construction and stored: since it always writes into
-    whatever `self._trace` currently is *at call time* (reset per event by
-    DetectionSubagent.run()), a single stored reference is enough — no need
-    to pass it through every call. `artifact` is the binary classifier
-    artifact (for top_features' grounding check in _run_llm_layer)."""
+    the circuit breaker. Constructed once per DetectionSubagent and reused
+    across events. `artifact` is the binary classifier artifact, used for
+    top_features' grounding check in _run_llm_layer."""
 
     def __init__(
         self,
@@ -223,23 +180,19 @@ class LLMExplanationLayer:
         self._llm_timeout_seconds = _resolve_llm_timeout(llm_timeout_seconds)
         self._circuit_breaker_threshold = circuit_breaker_threshold
 
-        # Persistent MCP connection state — lazily opened by _ensure_llm_connection(),
-        # torn down by close(). None means "not connected right now". register_event/
-        # clear_event tools are kept separate from _llm_tools so the LLM agent never
-        # sees them (only code calls them directly).
+        # Persistent MCP connection state, lazily opened by _ensure_llm_connection(). Tools are
+        # split so register_event/clear_event (code-only) never reach the LLM agent.
         self._mcp_client = None
         self._llm_tools_by_name = None
         self._register_event_tool = None
         self._clear_event_tool = None
         self._llm_model = None
 
-        # Connections abandoned mid-call after a timeout — not safe to disconnect from
-        # this thread (a background thread may still be using them), so they're queued
-        # here for close() (or the abandoned thread itself) to clean up later.
+        # Connections abandoned after a timeout — not safe to disconnect here, since a
+        # background thread may still be using them; queued for close() to clean up.
         self._abandoned_mcp_clients: List = []
 
-        # Circuit breaker: after this many consecutive LLM failures, stop attempting the
-        # LLM (and stop reconnecting) for the rest of this layer's life.
+        # Circuit breaker: stop attempting the LLM after this many consecutive failures.
         self._consecutive_llm_failures = 0
         self._circuit_open = False
 
@@ -270,18 +223,9 @@ class LLMExplanationLayer:
             )
 
     def warmup(self) -> dict:
-        """Open the MCP connection and send one tiny prompt to the LLM,
-        outside of any per-event timeout — so the first real event doesn't
-        have to absorb connection setup plus the model's (often slow, on a
-        local CPU model or a rate-limited hosted one) first inference. Call
-        this once before a run.
-
-        Retries a transient provider error (rate limit / 5xx / connection)
-        with backoff (see _call_with_retry), but never raises: returns
-        {"ok": bool, "elapsed_seconds": float, "reason": str | None} either
-        way, so a broken LLM/provider can't crash the caller — it can only
-        report warmup as failed and let the caller decide to skip the LLM
-        arm."""
+        """Open the MCP connection and send one tiny prompt, outside any
+        per-event timeout, so the first real event skips that cold-start
+        cost. Never raises — returns {"ok", "elapsed_seconds", "reason"}."""
         start = time.perf_counter()
 
         def attempt():
@@ -344,32 +288,21 @@ class LLMExplanationLayer:
         self, event: TrafficEvent, p_anomalous: float, vote_std: Optional[float],
         chosen_category: str, category_probability: Optional[float],
     ) -> Optional[dict]:
-        """Run the bounded LLM tool-calling loop (max MAX_LLM_TOOL_CALLS
-        steps, max self._llm_timeout_seconds wall clock) and validate its
-        output. Returns a validated {"explanation", "tools_used"} dict, or
-        None on any failure — the caller falls back to a template note.
-        Never raises: a broken LLM/MCP server must not break run().
+        """Run the bounded LLM call with a wall-clock timeout and validate
+        its output. Returns a validated {"explanation", "tools_used"} dict,
+        or None on any failure. Never raises.
 
-        Runs on a plain daemon thread rather than a ThreadPoolExecutor: on
-        timeout we can't force a blocking third-party call to stop, and a
-        pool's shutdown() joins its worker on exit, which would silently
-        turn our timeout into a wait. Abandoning a daemon thread instead
-        means a hung call never blocks the caller (or process exit).
+        Uses a daemon thread, not a ThreadPoolExecutor: a pool's shutdown()
+        joins its worker, which would turn our timeout into a wait; a
+        daemon thread can be abandoned outright on timeout.
 
-        step_buffer collects this call's log_step() calls locally instead of
-        writing straight into self._log_step: an abandoned (timed-out)
-        thread keeps running after this method returns for the *next*
-        event, and if it called self._log_step directly it would write into
-        that next event's trace. Steps are only replayed below once we know
-        this call actually finished within the timeout.
+        step_buffer holds this call's log_step() calls locally so an
+        abandoned (timed-out) thread can't write into a later event's trace
+        — replayed below only once we know this call finished in time.
 
-        The "llm_dispatch" step below is logged directly on this (the main)
-        thread, unlike "llm_layer_start" (buffered, only replayed on
-        success/timely-failure) — evaluate.py counts *invocations* from
-        llm_dispatch specifically, so a timed-out event still counts as
-        "sent to the LLM" even though its buffered steps never get merged.
-        It also records which DETECTION_LLM_MODE was used, resolved once
-        here (not inside the worker) so it's visible even on a timeout."""
+        "llm_dispatch" is logged directly (not buffered) so a timed-out
+        event still counts as sent to the LLM even though its buffered
+        steps never get merged."""
         mode = resolve_llm_mode()
         self._log_step(
             thought=f"Event is anomalous (category={chosen_category}) — dispatching to the "
@@ -420,8 +353,7 @@ class LLMExplanationLayer:
                 observation=f"{type(exc).__name__}: {exc}",
             )
             if provider_reason is None:
-                # Not a recognized provider error (rate limit / 5xx) — could well be the MCP
-                # connection itself (e.g. a broken pipe), so don't risk reusing it.
+                # Not a recognized provider error — could be the MCP connection itself.
                 self._drop_and_disconnect_connection()
             self._record_llm_failure(provider_reason or "exception")
             return None
@@ -437,12 +369,8 @@ class LLMExplanationLayer:
         ]
         validated, reason = parse_and_validate(raw_output, known_feature_names, grounded_feature_names)
 
-        # Salvage path: ToolCallingAgent only reaches this point with clean text when the
-        # model correctly called final_answer. If it instead exhausted max_steps without ever
-        # calling a tool (e.g. it just typed its answer as a chat message), smolagents itself
-        # falls back to one direct, un-tooled generation and returns that raw text — which is
-        # often the right JSON with some stray prose around it, not garbage. Re-run the exact
-        # same guardrails (parse_and_validate) on just the extracted object before giving up.
+        # Salvage: a model that never called final_answer still gets one un-tooled generation
+        # from smolagents, often valid JSON with stray prose — re-run validation on just that.
         salvaged = False
         if validated is None and reason == REASON_INVALID_JSON:
             extracted = extract_json_object(raw_output)
@@ -490,17 +418,12 @@ class LLMExplanationLayer:
         self, event: TrafficEvent, p_anomalous: float, vote_std: Optional[float],
         chosen_category: str, category_probability: Optional[float], step_buffer: List[dict], mode: str,
     ) -> str:
-        """Register this event's features under a short event_id, then run
-        either the agent tool-calling loop or a single direct LLM call,
-        depending on `mode` (see DEFAULT_LLM_MODE). Runs on a worker thread
-        (see _run_llm_layer) so its caller can enforce a wall-clock timeout
-        around it. Returns raw final-answer text, unvalidated, either way —
-        the caller (_run_llm_layer) doesn't need to know which mode produced
-        it.
+        """Register the event under a short event_id, dispatch to the agent
+        loop or single_shot per `mode`, and return raw (unvalidated)
+        final-answer text. Runs on a worker thread (see _run_llm_layer).
 
-        self-cleanup: if, by the time this call finishes, the main thread has
-        already abandoned the connection we started with (a timeout on this
-        very call), we disconnect it ourselves — the main thread couldn't,
+        If the main thread already abandoned our connection (a timeout on
+        this call), we disconnect it ourselves — the main thread couldn't,
         since we might still have been using it."""
         client, tools_by_name, register_tool, clear_tool = self._ensure_llm_connection()
         event_id = uuid.uuid4().hex[:12]
@@ -530,25 +453,11 @@ class LLMExplanationLayer:
         chosen_category: str, category_probability: Optional[float],
         tools_by_name: dict, step_buffer: List[dict],
     ) -> str:
-        """DETECTION_LLM_MODE=agent (default): build a fresh smolagents
-        ToolCallingAgent over a subset of the persistent MCP connection's
-        tools, and run the bounded reasoning loop. The task prompt carries
-        only event_id, the already-computed p_anomalous/tree_vote_std, and
-        the already-chosen category+probability — never the raw feature
-        dict — since that's most of a local model's prompt-processing time
-        on ~78 features.
-
-        Tool subset: top_features and predict_attack_category always;
-        tree_vote_spread only when the event is borderline (vote_std is not
-        None) — offering a tool with nothing meaningful for it to report
-        just tempts a small model into a wasted step. register_event/
-        clear_event/predict_proba_anomalous are never offered (see
-        LLM_HIDDEN_TOOL_NAMES); calling predict_attack_category here is for
-        the LLM's own investigation only — it never changes chosen_category.
-
-        A new ToolCallingAgent per call is cheap (no I/O) and keeps one
-        event's tool-call history from leaking into the next's — only the
-        underlying MCP connection (the expensive part) persists."""
+        """DETECTION_LLM_MODE=agent: run smolagents' ToolCallingAgent over a
+        subset of the MCP tools (never the raw feature dict — see
+        LLM_HIDDEN_TOOL_NAMES and docs/architecture.md for which tools and
+        why). A fresh agent per call is cheap and keeps tool-call history
+        from leaking between events; only the MCP connection persists."""
         from smolagents import ToolCallingAgent
 
         tool_names = ["top_features", "predict_attack_category"] + (
@@ -583,8 +492,7 @@ class LLMExplanationLayer:
                 "observation": reason,
             })
 
-        # Retries stay inside this call's overall wall-clock budget — _run_llm_layer's
-        # thread.join(timeout=...) bounds this whole method, retries and backoff included.
+        # Retries stay inside _run_llm_layer's overall timeout — it bounds this whole method.
         raw_output = _call_with_retry(lambda: agent.run(task), on_retry=on_retry)
 
         self._log_agent_memory_diagnostics(agent, raw_output, step_buffer)
@@ -602,24 +510,11 @@ class LLMExplanationLayer:
         chosen_category: str, category_probability: Optional[float],
         tools_by_name: dict, step_buffer: List[dict],
     ) -> str:
-        """DETECTION_LLM_MODE=single_shot: code calls top_features (and
-        tree_vote_spread, if borderline) directly via the MCP connection —
-        no tool-calling loop, no LLM decision about which tools to use —
-        then makes exactly one LLM call with the results (plus the already-
-        chosen category+probability) embedded in the prompt and
-        `response_format` set to ANSWER_JSON_SCHEMA. litellm forwards a
-        json_schema response_format to Ollama as its `format` parameter,
-        which Ollama enforces with grammar-constrained decoding — unlike
-        tool_choice, which litellm's own ollama transformation drops
-        outright ("causes ollama requests to hang"), so this is the reliable
-        structured-output path for small/local models that the agent loop's
-        tool-call requirement can't be forced onto. predict_attack_category
-        is not called here at all — code already has chosen_category from
-        its own direct classifier call before this method runs.
-
-        Returns the raw JSON text, same contract as _call_llm_agent_loop —
-        it still goes through the normal parse_and_validate/salvage pipeline
-        in _run_llm_layer, so no guardrail is bypassed by this mode."""
+        """DETECTION_LLM_MODE=single_shot: code calls the needed MCP tools
+        directly, then one litellm call with response_format=ANSWER_JSON_SCHEMA
+        — the reliable structured-output path on Ollama, where tool_choice
+        doesn't work (see docs/design-decisions.md). Same raw-text contract
+        and validation pipeline as _call_llm_agent_loop."""
         import litellm
 
         step_buffer.append({
@@ -691,20 +586,10 @@ class LLMExplanationLayer:
 
     @staticmethod
     def _log_agent_memory_diagnostics(agent, raw_output: str, step_buffer: List[dict]) -> None:
-        """Log the raw text of every step that failed to parse as a tool
-        call, plus whether the run only produced an answer because
-        smolagents exhausted max_steps and fell back to one direct,
-        un-tooled generation (`_handle_max_steps_reached` in
-        smolagents/agents.py) — this is exactly the "model output does not
-        contain any JSON blob" failure mode small local models hit: it
-        wastes steps replying in plain text instead of calling a tool, then
-        that final coerced answer is what parse_and_validate actually sees.
-        Without this, all we could see was the final raw_output; this makes
-        the earlier failed attempts visible in the trace/CSV too. Best-
-        effort: this is diagnostic logging, never allowed to break the main
-        flow (e.g. in tests where ToolCallingAgent is mocked and .memory
-        isn't a real Memory object), so any failure here is swallowed
-        silently."""
+        """Log each step that failed to parse as a tool call, and whether
+        smolagents had to fall back to an un-tooled generation after
+        exhausting max_steps. See docs/llm-layer.md (Diagnostics). Best-
+        effort — any failure here is swallowed, never breaks the main flow."""
         try:
             from smolagents.memory import ActionStep
 
@@ -728,14 +613,9 @@ class LLMExplanationLayer:
             pass
 
     def _ensure_llm_connection(self):
-        """Open the MCP client (spawns the tool-server subprocess, which
-        loads the model artifacts) on first use, and reuse it across events.
-        Returns (client, tools_by_name, register_tool, clear_tool) — tools_by_name
-        maps name -> Tool for everything the LLM agent may call (register_event/
-        clear_event/predict_proba_anomalous excluded, see LLM_HIDDEN_TOOL_NAMES);
-        _call_llm_agent picks the subset to actually hand to ToolCallingAgent.
-        Called from the worker thread started by _run_llm_layer (or from
-        warmup(), before any timed loop starts)."""
+        """Open the MCP client on first use and reuse it across events.
+        Returns (client, tools_by_name, register_tool, clear_tool) —
+        tools_by_name excludes LLM_HIDDEN_TOOL_NAMES."""
         if self._mcp_client is None:
             from mcp import StdioServerParameters
             from smolagents import MCPClient
@@ -752,16 +632,9 @@ class LLMExplanationLayer:
         return self._mcp_client, self._llm_tools_by_name, self._register_event_tool, self._clear_event_tool
 
     def _abandon_current_connection(self) -> None:
-        """After a timeout: stop referencing the current connection without
-        disconnecting it here — the timed-out worker thread may still be
-        using it, and it isn't safe to touch from this (the main) thread.
-        Queue it for close() to clean up, and let the worker thread's own
-        finally block disconnect it as soon as it notices (via _call_llm_agent)
-        that it's no longer self._mcp_client. This is also what avoids
-        reconnecting on every following event: only the connection changes
-        (to None, forcing a respawn on next use); repeated timeouts still
-        count toward the circuit breaker, which stops that respawn-then-
-        timeout-again cascade after a few consecutive failures."""
+        """After a timeout: drop the connection reference without
+        disconnecting — the timed-out worker thread may still be using it,
+        so only it (via _call_llm_agent) or close() may touch it now."""
         if self._mcp_client is not None:
             self._abandoned_mcp_clients.append(self._mcp_client)
         self._mcp_client = None
@@ -781,26 +654,10 @@ class LLMExplanationLayer:
             self._disconnect_client(client)
 
     def _get_llm_model(self):
-        """DETECTION_LLM_MODEL picks the LiteLLM model id (default: a local
-        Ollama model). DETECTION_LLM_API_KEY is only needed for a hosted
-        model (e.g. Gemini) — see .env.example. Output length is capped
-        (MAX_LLM_OUTPUT_TOKENS) since generation time dominates on a slow
-        local model. Built once and cached.
-
-        retry=False: smolagents' own Model has a built-in retryer for what it
-        recognizes as rate-limit errors (`is_rate_limit_error` — a substring
-        match on the message, so it also fires on some non-429 phrasing),
-        with defaults RETRY_MAX_ATTEMPTS=3 and RETRY_WAIT=60s exponential
-        (i.e. up to ~60s + ~120s of internal sleeping before it ever raises).
-        That's larger than our own default llm_timeout_seconds, so with it
-        left on, a 429 would blow our per-event timeout while still inside
-        smolagents' own retry loop — we'd record "timeout" and never get a
-        chance to run _call_with_retry's faster (2s/4s/8s) backoff at all.
-        It also doesn't retry 5xx/ServiceUnavailable (only rate-limit-shaped
-        messages), so it wasn't helping there either. We disable it so
-        _call_with_retry (bounded by the per-event timeout, see
-        _run_llm_layer) is the single, predictable retry authority for both
-        rate limits and provider-unavailable errors."""
+        """Build (and cache) the LiteLLMModel for DETECTION_LLM_MODEL.
+        retry=False: smolagents' own retryer can sleep longer than our
+        per-event timeout and doesn't handle 5xx at all — _call_with_retry
+        is the single retry authority instead. See docs/llm-layer.md."""
         if self._llm_model is None:
             from smolagents import LiteLLMModel
 

@@ -1,28 +1,11 @@
 """
 Ablation: RF-only vs RF+LLM (DetectionManager with use_llm=False vs True) on
-a held-out sample. The point is to show the LLM layer never changes the
-decision (accuracy/F1 should match exactly) or the category (code decides
-that too, deterministically — see subagent.py._choose_category) while
-reporting the LLM's explanation validity/latency cost.
+a held-out sample — shows the LLM layer never changes the decision or
+category, while reporting the LLM's explanation validity/latency cost.
 
-Uses src/detection/training/data.py's split_train_test — the SAME train/test
-split train_binary.py and train_category.py use — so every sampled event is
-guaranteed to have been in neither model's training data.
-
-Needs both trained artifacts (see train.py) and, for the +LLM arm, whatever
-DETECTION_LLM_MODEL points at (default: `ollama pull qwen2.5:7b` first, then
-`ollama serve`). If warmup fails (bad model id/API key, provider down), the
-+LLM arm is skipped and only the RF-only results are printed/saved.
-
-Usage:
-    python -m src.detection.evaluation.evaluate [--sample-size 200] [--random-state 42]
-                                      [--sampling random|borderline] [--llm-timeout 20]
-                                      [--llm-delay 0]
-
-    python -m src.detection.evaluation.evaluate --offline [--category-threshold 0.9] [--min-category-accuracy 0.99]
-        Offline, no-LLM batch evaluation over the entire test split, plus a
-        CATEGORY_CONFIDENCE_THRESHOLD sweep on a validation split carved from
-        train — see evaluation/offline.py. Ignores every other flag above.
+Samples from data.split_train_test's TEST half, the same split
+train_binary.py/train_category.py use, so no sampled event was seen in
+training. See docs/evaluation.md for usage and current result tables.
 """
 import argparse
 import csv
@@ -49,23 +32,14 @@ BORDERLINE_LOW, BORDERLINE_HIGH = 0.3, 0.7  # slightly wider than the subagent's
 
 
 def build_holdout_sample(sample_size: int, random_state: int, artifact: dict, sampling: str = "random"):
-    """Draws `sample_size` rows from the TEST half of data.split_train_test —
-    never the train half either model was fit on.
-
-    sampling="random": a plain stratified-by-label random sample.
-    sampling="borderline": the same, but up to a quarter of the sample is
-    swapped for events in the borderline p_anomalous band, so the sample
-    actually exercises the LLM layer's trigger condition rather than being
-    all clear-cut cases — useful when you specifically want to evaluate the
-    LLM path, at the cost of the sample no longer being representative of
-    the real class/confidence distribution. `random_state` only controls
-    this sampling step, not the underlying train/test split (which is fixed
-    — see data.split_train_test).
+    """Draw sample_size rows from the TEST half of data.split_train_test.
+    sampling="borderline" swaps up to a quarter of the sample for events in
+    the borderline p_anomalous band, to exercise the LLM trigger condition
+    (see docs/evaluation.md). random_state controls only this sampling step.
 
     Returns (events, labels, true_categories) — true_categories is the
-    original multiclass CICIDS2017 Label mapped via
-    data.map_cicids_label_to_category (None for BENIGN/unrecognized).
-    """
+    original CICIDS2017 Label mapped via data.map_cicids_label_to_category
+    (None for BENIGN/unrecognized)."""
     df = data.load_clean_dataframe()
     _, test_df = data.split_train_test(df)
     feature_names = data.select_feature_names(df, label_col=data.LABEL_COL)
@@ -127,11 +101,8 @@ def _llm_mode(trace) -> Optional[str]:
 
 def _category_decision(trace):
     """The classifier's raw top-1 category + probability, from whichever
-    step _choose_category logged for a truly anomalous event —
-    "category_decision" (ordinary threshold decision) or
-    "model_disagreement" (category model's top vote was Benign, contradicting
-    the binary model) — independent of use_llm/llm_invoked entirely, since
-    the category decision is deterministic and made by code either way."""
+    step _choose_category logged ("category_decision" or
+    "model_disagreement") — deterministic, independent of use_llm."""
     for step in trace:
         if step.action in ("category_decision", "model_disagreement"):
             ti = step.tool_input or {}
@@ -140,19 +111,15 @@ def _category_decision(trace):
 
 
 def _model_disagreement(trace) -> bool:
-    """True when _choose_category found the category model's top vote was
-    Benign for an event the binary model already called anomalous — a
-    disagreement between the two models, distinct from an ordinary
-    below-threshold "Unknown" (see subagent.py._choose_category)."""
+    """True when the category model's top vote was Benign for an event the
+    binary model called anomalous (see subagent.py._choose_category)."""
     return any(step.action == "model_disagreement" for step in trace)
 
 
 def _llm_diagnostics(trace):
-    """Raw text of every step that failed to parse as a tool call, plus the
-    forced final-answer text if smolagents exhausted max_steps without the
-    model ever calling final_answer — see
-    DetectionSubagent._log_agent_memory_diagnostics. Lets a CSV row show
-    exactly what a small local model wrote, not just whether it passed."""
+    """Raw text of failed tool-call-parse steps, plus the forced
+    final-answer text on a max-steps exhaustion — see
+    DetectionSubagent._log_agent_memory_diagnostics."""
     step_failures = [step.observation for step in trace if step.action == "llm_step_failed"]
     forced_final_answer = next(
         (step.observation for step in trace if step.action == "llm_forced_final_answer"), None,
@@ -161,31 +128,13 @@ def _llm_diagnostics(trace):
 
 
 def compute_category_report(rows: list) -> dict:
-    """Category accuracy over ALL truly anomalous events in the sample —
-    NOT only ones where the LLM ran. The category decision
-    (subagent.py._choose_category) is a deterministic classifier.
-    predict_attack_category call code makes for every anomalous event, same
-    principle as is_anomalous/confidence, so it's available whether or not
-    use_llm is even True; the RF-only arm reports it exactly like the +LLM
-    arm does.
-
-    Reports both:
-    - "accuracy": the code-chosen category (top class if its probability
-      clears CATEGORY_CONFIDENCE_THRESHOLD, else "Unknown")
-    - "raw_accuracy": the classifier's raw top-1 class, no threshold applied
-    plus a naive "always guess the most common true category" baseline over
-    the same events, and a confusion table for the code-chosen category.
-
-    Scored only over rows with true_label == 1 (an actual attack the binary
-    model also called anomalous) and a known true_category (excludes
-    BENIGN/unrecognized labels) — a row the binary model got wrong isn't a
-    category-accuracy question, that's what the binary accuracy/F1 are for.
-    A false negative (true_label == 1 but the binary model called it benign)
-    never had _choose_category run at all, so its "category" is None, not
-    "Unknown" — excluded here by the same "model also called anomalous" rule,
-    not folded into "Unknown" (which means something different: the category
-    model *did* run but wasn't confident enough).
-    """
+    """Category accuracy over every truly anomalous event in the sample,
+    regardless of use_llm (the category decision is deterministic — see
+    subagent.py._choose_category). Reports "accuracy" (code-chosen,
+    thresholded), "raw_accuracy" (top-1, unthresholded), a trivial
+    most-common-category baseline, and a confusion table. Scored only over
+    rows the binary model also called anomalous with a known true_category
+    — see docs/evaluation.md for what's excluded and why."""
     scored = [
         r for r in rows
         if r["true_label"] == 1 and r["true_category"] is not None and r["category"] is not None
@@ -241,18 +190,10 @@ def print_category_report(report: dict) -> None:
 
 
 def compute_false_positive_categorization(rows: list) -> dict:
-    """Among events the binary model wrongly flagged anomalous
-    (true_label == 0, predicted == 1), how often the category decision still
-    handed out a specific attack category rather than "Unknown".
-
-    Before train_category.py trained on a Benign class, this was exactly the
-    gap a real run surfaced: 5 benign events the binary model false-positived
-    all got a confident attack category (Botnet 0.97-1.0 x4, DoS 0.99),
-    because the category model had no benign option to vote for and
-    compute_category_report never scores benign ground truth at all — this
-    metric is the one that would have caught it. Should be ~0% once the
-    Benign class (and model_disagreement) are in place.
-    """
+    """Among the binary model's false positives (true_label == 0, predicted
+    == 1), how often the category decision still handed out a specific
+    attack category instead of "Unknown". See docs/design-decisions.md for
+    why this metric exists and docs/evaluation.md for the current rate."""
     false_positives = [r for r in rows if r["true_label"] == 0 and r["predicted"] == 1]
     n = len(false_positives)
     if n == 0:
@@ -273,22 +214,12 @@ def print_false_positive_report(report: dict) -> None:
 
 
 def run_arm(manager: DetectionManager, events, labels, true_categories, llm_delay_seconds: float = 0.0):
-    """Runs `manager` over every event, timing each call and recording
-    whether the LLM layer fired, whether its output validated, and (when it
-    didn't) why. "Fired" is counted from the main-thread "llm_dispatch" step
-    (logged unconditionally before the timed call, not the buffered
-    "llm_layer_start" that a timed-out call never gets to merge into the
-    trace) — otherwise a timeout would silently undercount invocations.
-
-    true_categories is the per-event ground-truth attack category from
-    build_holdout_sample (None for benign/unrecognized), aligned with
-    events/labels — used for compute_category_report and recorded as each
-    row's true_category. category/raw_top_category are read from the trace's
-    "category_decision" step, which _choose_category logs for every truly
-    anomalous event regardless of use_llm.
-
-    llm_delay_seconds, if set, sleeps after every event that dispatched to
-    the LLM (not after RF-only events) — for free-tier rate limits."""
+    """Run `manager` over every event, timing each call and recording
+    whether the LLM fired, validated, and (if not) why. "Fired" is counted
+    from the unbuffered "llm_dispatch" step so a timeout doesn't undercount
+    it. true_categories aligns with events/labels (None for benign/
+    unrecognized). llm_delay_seconds, if set, sleeps after each event
+    dispatched to the LLM, for free-tier rate limits."""
     predictions, latencies_ms = [], []
     llm_invoked = llm_validated = 0
     categories, fallback_reasons, rows = [], [], []
@@ -374,9 +305,7 @@ def print_summary(rf_only: dict, rf_llm: Optional[dict], sampling: str):
         print(f"category distribution (RF+LLM detector_notes): {rf_llm['category_distribution']}")
         print(f"fallback reason counts (RF+LLM): {rf_llm['fallback_reason_counts']}")
 
-    # The category decision is deterministic and independent of use_llm (see
-    # subagent.py._choose_category), so this is identical whether or not the LLM ran —
-    # report it once, from the arm that's always available.
+    # Category decision is deterministic, independent of use_llm — report once.
     print_category_report(rf_only["category_report"])
     print_false_positive_report(rf_only["false_positive_report"])
     print(f"model disagreement count (binary anomalous, category top vote Benign): "

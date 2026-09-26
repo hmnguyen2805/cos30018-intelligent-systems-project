@@ -4,18 +4,11 @@ Thin wrapper: trains both models needed at inference time.
 Usage:
     python -m src.detection.train
 
-Runs training.train_binary (BENIGN vs anomalous -> models/detection_binary.joblib)
-and training.train_category (attack category, anomalous rows only ->
-models/detection_category.joblib) — see src/detection/training/data.py for
-the shared data loading and the one train/test split both use. Run either
-individually via `python -m src.detection.training.train_binary` /
-`python -m src.detection.training.train_category` if you only need one.
-
-Migrating from the old single-artifact layout: this project used to save
-everything to models/detection_rf.joblib. That path is no longer read by
-anything — this script (or classifier.load_artifact's own error message,
-if you hit it first) is the fix: retrain to get the new
-models/detection_binary.joblib + models/detection_category.joblib.
+Runs training.train_binary then training.train_category — see
+training/data.py for the shared data loading and train/test split both use.
+Run either individually (python -m src.detection.training.train_binary /
+train_category) if you only need one. See docs/design-decisions.md for the
+old single-artifact layout this replaced.
 """
 from src.detection.training import train_binary, train_category
 

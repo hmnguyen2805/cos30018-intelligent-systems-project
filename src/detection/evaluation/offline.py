@@ -1,34 +1,14 @@
 """
-Offline, no-LLM evaluation: batch-predicts both classifiers directly over a
-whole split (the full TEST split, or a VALIDATION split carved from TRAIN for
-threshold selection) — no DetectionManager/DetectionSubagent, no per-event
-agent loop, no borderline tree-vote recheck. That per-event machinery is what
-evaluate.py's default (sampled, RF-only vs RF+LLM) mode exercises; this module
-answers a different question — "how good are the two trained classifiers,
-across the entire held-out data, on their own" — for which batch
-model.predict_proba() over a numpy matrix is both simpler and orders of
-magnitude faster than looping DetectionManager.run() over hundreds of
-thousands of events.
+Offline, no-LLM batch evaluation over a whole split (TEST, or a VALIDATION
+split carved from TRAIN for threshold selection) — no DetectionManager, no
+per-event loop. batch model.predict_proba() is simpler and far faster than
+looping DetectionManager.run() over hundreds of thousands of events.
 
-Two things live here:
-1. A full-test-split report: binary precision/recall/F1/ROC-AUC; category
-   per-class precision/recall/F1 (+ row counts) over every FLAGGED flow — true
-   attacks the binary model also caught, PLUS its false positives (scored as
-   classifier.BENIGN_CATEGORY), so precision reflects false alarms; macro F1
-   over real attack classes only; coverage (% of true attacks given a
-   specific category, replacing the old "% Unknown" framing); false-positive
-   categorisation rate (+count); model-disagreement count. Heartbleed is
-   excluded from scoring (its true category and a low-confidence punt are
-   the same "Unknown" string — see is_heartbleed_label) and reported as a
-   separate count instead of a class row.
-2. A CATEGORY_CONFIDENCE_THRESHOLD sweep, evaluated on a VALIDATION split
-   carved from TRAIN (data.split_validation) rather than TEST — so choosing a
-   threshold never tunes on the same data the headline numbers above are
-   reported on. Prints a table, saves it as CSV, and prints a *recommended*
-   threshold (recommend_category_threshold: the highest swept threshold
-   whose validation accuracy clears --min-category-accuracy, falling back to
-   the best-accuracy one otherwise) — subagent.DEFAULT_CATEGORY_CONFIDENCE_THRESHOLD
-   is never changed automatically.
+Reports binary precision/recall/F1/ROC-AUC, per-class category
+precision/recall/F1, false-positive categorisation rate, and a
+CATEGORY_CONFIDENCE_THRESHOLD sweep with a recommended value (never applied
+automatically). See docs/evaluation.md for exactly what's scored, why
+Heartbleed and Benign are handled specially, and current result tables.
 """
 import csv
 import os
@@ -79,16 +59,10 @@ def print_binary_report(report: dict) -> None:
 
 
 def batch_predict_category(category_artifact: dict, X: np.ndarray, threshold: float):
-    """Vectorized equivalent of subagent.DetectionSubagent._choose_category
-    over a whole matrix of rows. Returns four same-length arrays:
-    - chosen: "Unknown" wherever the top vote is classifier.BENIGN_CATEGORY
-      (a binary/category model disagreement — never trusted as a specific
-      category, regardless of its probability) OR its probability is below
-      `threshold`; otherwise the raw top category.
-    - raw_top_category / raw_top_probability: the category model's own
-      unthresholded top-1 vote, straight from predict_proba's argmax.
-    - disagreement: True wherever raw_top_category is classifier.BENIGN_CATEGORY.
-    """
+    """Vectorized equivalent of subagent.DetectionSubagent._choose_category.
+    Returns (chosen, raw_top_category, raw_top_probability, disagreement) —
+    chosen is "Unknown" wherever the top vote is BENIGN_CATEGORY or below
+    threshold; disagreement flags a BENIGN_CATEGORY top vote."""
     model = category_artifact["category_model"]
     classes = np.array(category_artifact.get("classes") or list(model.classes_))
     proba = model.predict_proba(X)
@@ -103,17 +77,11 @@ def batch_predict_category(category_artifact: dict, X: np.ndarray, threshold: fl
 
 
 def is_heartbleed_label(raw_labels) -> np.ndarray:
-    """True wherever the raw CICIDS2017 `Label` is Heartbleed — the only raw
-    label data.map_cicids_label_to_category maps to the literal string
-    "Unknown", which is ALSO the string subagent.py._choose_category uses
-    for a low-confidence punt (or a binary/category model disagreement).
-    Used to exclude Heartbleed from per-class category scoring entirely
-    (see compute_offline_category_report) rather than giving it a
-    "Heartbleed" class of its own: the trained category model was never
-    taught to tell the two apart (train_category.py trains it on
-    data.map_cicids_label_to_category's output, which conflates them the
-    same way), so a genuine "Heartbleed" class would need retraining, not
-    just a reporting change. Its count is reported separately instead."""
+    """True wherever the raw CICIDS2017 Label is Heartbleed — the one true
+    label that maps to the same "Unknown" string a low-confidence punt uses.
+    Excluded from per-class scoring (see docs/evaluation.md) rather than
+    given its own class, since the model was never trained to tell them
+    apart."""
     return np.array([isinstance(r, str) and r.strip().lower() == "heartbleed" for r in raw_labels])
 
 
@@ -121,14 +89,10 @@ def scored_attack_mask(
     true_label: np.ndarray, binary_pred: np.ndarray, true_category: np.ndarray,
     is_heartbleed: Optional[np.ndarray] = None,
 ) -> np.ndarray:
-    """The same scoring rule as evaluate.compute_category_report: a true
-    attack (true_label == 1) that the binary model ALSO caught (binary_pred
-    == 1) and whose true_category is known (excludes BENIGN/unrecognized). A
-    false negative (binary_pred == 0) never had a category computed online,
-    so it's excluded here the same way. `is_heartbleed`, if given, excludes
-    Heartbleed rows too (see is_heartbleed_label) — their true_category is
-    "Unknown", the same string a low-confidence punt uses, so scoring them
-    would silently conflate the two."""
+    """Same scoring rule as evaluate.compute_category_report: a true attack
+    the binary model also caught, with a known true_category. Excludes
+    Heartbleed rows too when `is_heartbleed` is given (see
+    is_heartbleed_label)."""
     has_true_category = np.array([c is not None for c in true_category])
     mask = (true_label == 1) & (binary_pred == 1) & has_true_category
     if is_heartbleed is not None:
@@ -140,33 +104,13 @@ def compute_offline_category_report(
     true_category_for_table: np.ndarray, chosen_category: np.ndarray, raw_top_category: np.ndarray,
     table_mask: np.ndarray, attack_mask: np.ndarray,
 ) -> dict:
-    """Per-class precision/recall/F1 (+ row counts/support) over `table_mask`
-    — every FLAGGED flow: true attacks the binary model also caught, PLUS its
-    false positives (whose `true_category_for_table` entry must be
-    classifier.BENIGN_CATEGORY — see run_offline_evaluation). Including the
-    false positives is what makes each attack class's PRECISION reflect false
-    alarms: a benign flow the category model wrongly labeled "DDoS" now
-    counts against DDoS's precision, which it couldn't before Benign was in
-    the scoring universe at all.
-
-    `attack_mask` (a subset of table_mask, true attacks only — Heartbleed
-    already excluded by the caller, see is_heartbleed_label) is what
-    accuracy/raw_accuracy/coverage/macro_f1 are computed over instead: a
-    false positive was never a category to "get right", and macro F1 must
-    average real attack classes only (per the module docstring), never the
-    Benign row.
-
-    "coverage" replaces the old "% Unknown" framing: % of true attacks given
-    a SPECIFIC category (chosen != "Unknown") rather than punted — phrased
-    positively since "Unknown" is no longer a class row in this table (see
-    the module docstring's Heartbleed note for why).
-
-    classifier.BENIGN_CATEGORY's own row will always show precision=recall=0:
-    "Benign" is never a possible `chosen_category` value (a Benign top vote
-    is always reported as "Unknown" — see subagent.py._choose_category), so
-    it can never itself be "predicted". Its purpose is solely to make OTHER
-    classes' precision honest, not to score itself.
-    """
+    """Per-class precision/recall/F1 over table_mask (true attacks caught
+    plus false positives scored as BENIGN_CATEGORY, so precision reflects
+    false alarms). accuracy/raw_accuracy/coverage/macro_f1 are computed over
+    attack_mask only (true attacks, Heartbleed excluded) — a false positive
+    is never a category to "get right". BENIGN_CATEGORY's own row is always
+    precision=recall=0, since it can never itself be predicted; its purpose
+    is only to penalize other classes' precision. See docs/evaluation.md."""
     n = int(attack_mask.sum())
     n_table = int(table_mask.sum())
     if n == 0:
@@ -180,9 +124,7 @@ def compute_offline_category_report(
     true_table = true_category_for_table[table_mask]
     chosen_table = chosen_category[table_mask]
 
-    # "Unknown" is deliberately never its own label row (see module docstring) — a chosen
-    # "Unknown" still counts as a miss against whatever true label it occurred for, it's just
-    # not reported as its own precision/recall/f1 row.
+    # "Unknown" is never its own label row — it still counts as a miss, just not its own row.
     attack_labels = sorted((set(true_attack.tolist()) | set(chosen_attack.tolist())) - {"Unknown"})
     table_labels = sorted(set(attack_labels) | {classifier.BENIGN_CATEGORY})
 
@@ -228,12 +170,9 @@ def print_offline_category_report(report: dict) -> None:
 def compute_offline_false_positive_report(
     true_label: np.ndarray, binary_pred: np.ndarray, chosen_category: np.ndarray,
 ) -> dict:
-    """Among events the binary model wrongly flagged anomalous (true_label ==
-    0, binary_pred == 1), how many/what percentage still got a specific
-    attack category (not "Unknown") from the thresholded category decision.
-    See train_category.py's module docstring for the bug this metric exists
-    to catch: before a Benign class existed, this was consistently well above
-    0%."""
+    """Among the binary model's false positives, how many/what percentage
+    still got a specific attack category instead of "Unknown". See
+    docs/design-decisions.md for why this metric exists."""
     fp_mask = (true_label == 0) & (binary_pred == 1)
     n = int(fp_mask.sum())
     if n == 0:
@@ -264,14 +203,10 @@ def sweep_category_thresholds(
     thresholds: Sequence[float] = CATEGORY_THRESHOLD_SWEEP,
     is_heartbleed: Optional[np.ndarray] = None,
 ) -> list:
-    """One row per threshold: category accuracy and % Unknown on the scored
-    true-attack subset (Heartbleed excluded when `is_heartbleed` is given —
-    see is_heartbleed_label), plus the false-positive categorisation rate —
-    same metrics compute_offline_category_report/
-    compute_offline_false_positive_report report, recomputed at each
-    candidate threshold. Callers pass a VALIDATION split's
-    X/true_category/binary_pred/true_label (never TEST's) so selecting a
-    threshold from this sweep never tunes on test data."""
+    """One row per threshold: category accuracy, % Unknown, and false-
+    positive categorisation rate, recomputed at each candidate threshold.
+    Callers pass a VALIDATION split (never TEST) so selecting a threshold
+    never tunes on test data."""
     mask = scored_attack_mask(true_label, binary_pred, true_category, is_heartbleed)
     rows = []
     for threshold in thresholds:
@@ -303,20 +238,11 @@ DEFAULT_MIN_CATEGORY_ACCURACY = 0.99
 def recommend_category_threshold(
     sweep_rows: list, min_accuracy: float = DEFAULT_MIN_CATEGORY_ACCURACY,
 ) -> Optional[dict]:
-    """Recommend the HIGHEST threshold whose validation category accuracy (on
-    true attacks) is >= min_accuracy — a higher threshold is more
-    conservative (more specific guesses get punted to "Unknown"), so among
-    thresholds that all clear the accuracy bar, the strictest one is
-    preferred. If no threshold clears the bar, falls back to the single
-    highest-accuracy row (ties broken by the lowest false-positive
-    categorisation rate, then the highest threshold) and flags that the bar
-    wasn't met via "meets_min_accuracy": False.
-
-    Returns None only if no row has a scored true-attack subset at all. The
-    result carries the sweep row's own fields plus "min_accuracy" and
-    "meets_min_accuracy", so callers can print exactly which rule fired.
-    This never changes subagent.DEFAULT_CATEGORY_CONFIDENCE_THRESHOLD — it's
-    a printed recommendation only; the caller decides whether to act on it."""
+    """Recommend the highest threshold whose validation accuracy clears
+    min_accuracy, falling back to the single highest-accuracy row (ties:
+    lower FP rate, then higher threshold) with meets_min_accuracy=False.
+    Returns None if no row has a scored subset. Never changes
+    subagent.DEFAULT_CATEGORY_CONFIDENCE_THRESHOLD — recommendation only."""
     scored = [r for r in sweep_rows if r["category_accuracy"] is not None]
     if not scored:
         return None
@@ -369,12 +295,10 @@ def save_threshold_sweep_csv(path: Path, sweep_rows: list) -> None:
 def run_offline_evaluation(
     default_threshold: float, min_category_accuracy: float = DEFAULT_MIN_CATEGORY_ACCURACY,
 ) -> None:
-    """Loads the full cleaned dataset, evaluates both classifiers in batch
-    over the whole TEST split at `default_threshold`, then sweeps
-    CATEGORY_CONFIDENCE_THRESHOLD on a VALIDATION split carved from TRAIN and
-    prints a recommendation (see recommend_category_threshold for the rule).
-    Prints everything; saves the sweep to results/category_threshold_sweep.csv.
-    Never modifies `default_threshold`, `min_category_accuracy`, or any
+    """Evaluate both classifiers over the whole TEST split at
+    default_threshold, then sweep CATEGORY_CONFIDENCE_THRESHOLD on a
+    VALIDATION split and print a recommendation. Saves the sweep to
+    results/category_threshold_sweep.csv. Never modifies any argument or
     training artifact."""
     binary_artifact = classifier.load_artifact(classifier.DEFAULT_BINARY_MODEL_PATH)
     category_artifact = classifier.load_artifact(classifier.DEFAULT_CATEGORY_MODEL_PATH)

@@ -1,31 +1,21 @@
 """
-Guardrail logic for the Detection Subagent's optional LLM layer: the fixed
-output schema, the system prompts, and the validation/grounding checks that
-decide whether an LLM answer is trusted or discarded in favour of a
-deterministic template note.
+Guardrail logic for the LLM layer: the fixed output schema, system prompts,
+and validation/grounding checks deciding whether an LLM answer is trusted or
+discarded for a template note.
 
-The LLM never decides the attack category. That's a deterministic tool
-(classifier.predict_attack_category) code applies a confidence threshold to
-— the same principle as is_anomalous/confidence — see subagent.py's
-_choose_category. The LLM's only job is to write a short, grounded
-explanation of a category code already chose, and its schema reflects that
-structurally: {explanation, tools_used}, no category field. There's nothing
-for a validation rule to reject here — the LLM cannot state a category, it
-was never offered a place to put one.
+The schema ({explanation, tools_used}) has no category field — the LLM
+cannot state a category, it was never offered a place to put one. See
+subagent.py._choose_category for how the category is actually decided.
 
-Kept separate from subagent.py so these checks — the actual safety
-boundary between "LLM suggestion" and "what goes in detector_notes" — can be
-read and unit-tested without any agent-loop or MCP wiring.
+Kept separate from subagent.py so this safety boundary can be unit-tested
+without any agent-loop or MCP wiring.
 """
 import json
 from typing import Dict, List, Optional, Tuple
 
 MAX_EXPLANATION_CHARS = 300
 
-# JSON Schema for the fixed answer shape — used by subagent.py's single_shot mode
-# (DETECTION_LLM_MODE=single_shot) via litellm's response_format={"type": "json_schema", ...},
-# which Ollama enforces with grammar-constrained decoding. No category field: see module
-# docstring.
+# Fixed answer shape — used as single_shot mode's litellm response_format. No category field.
 ANSWER_JSON_SCHEMA = {
     "type": "object",
     "properties": {
@@ -35,16 +25,13 @@ ANSWER_JSON_SCHEMA = {
     "required": ["explanation", "tools_used"],
 }
 
-# parse_and_validate's second return value on failure — kept as a fixed, short
-# vocabulary so subagent.py can log a distinct trace action per reason and
-# evaluate.py can report fallback_reason per event without re-deriving it.
+# parse_and_validate's failure reasons — a fixed vocabulary so callers can log/report
+# a distinct trace action per reason without re-deriving it.
 REASON_INVALID_JSON = "invalid_json"
 REASON_UNGROUNDED = "ungrounded"
 
-# ToolCallingAgent requires every step to be a tool call, and the run only ends when you
-# call final_answer — it is not enough to just print JSON as your message text, that has
-# no tool call in it and the step fails to parse. Keep this short: small models follow
-# short, concrete instructions far more reliably than a longer rules list.
+# A run only ends when the model calls final_answer as an actual tool call — printing JSON as
+# plain text fails to parse. Kept short: small models follow short instructions more reliably.
 SYSTEM_PROMPT = """Investigate this network traffic event, then answer via final_answer.
 
 Code has already decided this event's category (given to you in the task, with its
@@ -65,15 +52,9 @@ Rules:
 - Do not call the same tool twice.
 """
 
-# single_shot mode (DETECTION_LLM_MODE=single_shot): code has already called top_features (and
-# tree_vote_spread, if borderline) via MCP, already decided the category (via
-# classifier.predict_attack_category directly, not through MCP), and put all of it in the user
-# message below — no tool-calling loop at all here, just one direct generation. Paired with
-# response_format's json_schema (ANSWER_JSON_SCHEMA) via litellm, which Ollama enforces with
-# grammar-constrained decoding, this is the reliable path for small local models that don't
-# consistently honor tool_choice (litellm's own ollama transformation drops tool_choice
-# entirely — "causes ollama requests to hang" — so nothing can force a small model through the
-# agent loop's tool-call requirement).
+# single_shot: one direct generation, no tool-calling loop — feature data is already looked up
+# and embedded in the user message. Paired with ANSWER_JSON_SCHEMA as litellm's response_format.
+# See docs/design-decisions.md for why (litellm/Ollama tool_choice limitation).
 SINGLE_SHOT_SYSTEM_PROMPT = """You are assisting the Detection Subagent in explaining a network \
 traffic event to downstream analysts. Code has already decided this event's category (given to \
 you below, with its confidence) — you are not choosing or restating it, only explaining it. You \
@@ -106,21 +87,12 @@ def build_template_note(vote_std: Optional[float] = None) -> str:
 def parse_and_validate(
     raw_output: str, known_feature_names: List[str], grounded_feature_names: List[str]
 ) -> Tuple[Optional[Dict], Optional[str]]:
-    """Parse the LLM's raw final answer and validate it against the fixed
-    schema ({explanation, tools_used} — no category, see module docstring)
-    and the grounding rule.
-
-    `known_feature_names` is every feature name the model was trained on (the
-    universe of names that could plausibly be mentioned); `grounded_feature_names`
-    is the subset actually returned by top_features for this event. A mention
-    of any `known_feature_names` entry that isn't in `grounded_feature_names`
-    fails validation — it means the LLM named a feature it didn't look up.
-
-    Returns `(parsed_dict, None)` on success, or `(None, reason)` where reason
-    is REASON_INVALID_JSON or REASON_UNGROUNDED — the caller falls back to a
-    template note either way, but subagent.py logs (and evaluate.py reports)
-    which reason it was.
-    """
+    """Parse and validate the LLM's raw answer against the fixed schema and
+    the grounding rule. `known_feature_names` is every trainable feature
+    name; `grounded_feature_names` is the subset top_features actually
+    returned for this event — mentioning a known name outside that subset
+    fails grounding. Returns (parsed_dict, None) on success, or
+    (None, REASON_INVALID_JSON | REASON_UNGROUNDED) on failure."""
     try:
         data = json.loads(raw_output)
     except (json.JSONDecodeError, TypeError):
@@ -145,13 +117,10 @@ def parse_and_validate(
 
 
 def extract_json_object(text: str) -> Optional[str]:
-    """Best-effort salvage: pull a JSON object substring out of raw text that
-    isn't itself valid JSON — e.g. the model wrote prose around the object
-    instead of submitting it as final_answer's argument. Returns the
-    substring from the first '{' to the last '}' if it parses as JSON, else
-    None. The caller re-runs the extracted string through parse_and_validate
-    (the same schema/grounding checks apply — this only recovers the JSON,
-    it doesn't relax any guardrail)."""
+    """Pull the substring from the first '{' to the last '}' out of `text`
+    and return it if it parses as JSON, else None. The caller re-runs it
+    through parse_and_validate — this only recovers JSON, no guardrail
+    is relaxed."""
     if not isinstance(text, str):
         return None
     start = text.find("{")
