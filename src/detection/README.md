@@ -58,10 +58,13 @@ python -m src.detection.train
 pytest tests/ -k detection
 
 # evaluate: sampled RF-vs-RF+LLM comparison
-python -m src.detection.evaluate --sample-size 200 --sampling random
+python -m src.detection.evaluation.evaluate --sample-size 200 --sampling random
 
 # evaluate: full-test-split batch metrics + threshold sweep, no LLM
-python -m src.detection.evaluate --offline
+python -m src.detection.evaluation.evaluate --offline
+
+# run the MCP tool server standalone (manual testing)
+python -m src.detection.llm.tool_server
 ```
 
 The optional LLM layer needs a `.env` (see

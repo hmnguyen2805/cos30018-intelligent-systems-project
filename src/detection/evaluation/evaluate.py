@@ -44,7 +44,7 @@ from src.detection.subagent import DEFAULT_CATEGORY_CONFIDENCE_THRESHOLD
 from src.detection.training import data
 from src.shared.schemas import TrafficEvent
 
-RESULTS_DIR = Path(__file__).resolve().parent / "results"
+RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
 BORDERLINE_LOW, BORDERLINE_HIGH = 0.3, 0.7  # slightly wider than the subagent's band, for sampling
 
 

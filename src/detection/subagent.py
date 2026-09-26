@@ -19,7 +19,7 @@ step, never as a specific attack category. This whole decision is
 deterministic and independent of use_llm — same principle as
 is_anomalous/confidence, computed by code, never the LLM.
 
-Optionally (`use_llm=True`), a bounded LLM loop (llm_layer.LLMExplanationLayer)
+Optionally (`use_llm=True`), a bounded LLM loop (llm.layer.LLMExplanationLayer)
 then writes a short, grounded explanation of that already-chosen category for
 detector_notes; the LLM's output schema has no category field at all, so it
 structurally cannot override the decision. Any invalid, ungrounded, timed-out,
@@ -31,8 +31,8 @@ Owned by the Detection Manager (manager.py), which delegates each event here.
 from typing import Optional, Tuple
 
 from src.detection import classifier
-from src.detection.llm_layer import DEFAULT_CIRCUIT_BREAKER_THRESHOLD, LLMExplanationLayer
-from src.detection.llm_notes import build_template_note
+from src.detection.llm.layer import DEFAULT_CIRCUIT_BREAKER_THRESHOLD, LLMExplanationLayer
+from src.detection.llm.notes import build_template_note
 from src.shared.base import BaseAgent
 from src.shared.schemas import DetectionResult, TrafficEvent
 
@@ -43,7 +43,7 @@ DISAGREEMENT_THRESHOLD = 0.15  # tree-vote std above this = low ensemble consens
 # Below this, classifier.predict_attack_category's top class isn't trusted and code reports
 # "Unknown" instead of a possibly-wrong specific category. Same role as the borderline band
 # above, but for the category decision rather than is_anomalous. Set from
-# offline_eval.py's --offline threshold sweep: the highest swept threshold whose validation
+# evaluation/offline.py's --offline threshold sweep: the highest swept threshold whose validation
 # category accuracy on true attacks cleared 0.99 (see README's "Category decision" section for
 # the full sweep and the false-positive-categorisation tradeoff this threshold doesn't fully fix).
 DEFAULT_CATEGORY_CONFIDENCE_THRESHOLD = 0.9

@@ -43,7 +43,7 @@ from sklearn.metrics import (
 from src.detection import classifier
 from src.detection.training import data
 
-RESULTS_DIR = Path(__file__).resolve().parent / "results"
+RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
 CATEGORY_THRESHOLD_SWEEP = (0.5, 0.6, 0.7, 0.8, 0.9)
 
 

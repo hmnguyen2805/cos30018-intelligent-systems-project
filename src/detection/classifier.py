@@ -160,7 +160,7 @@ def top_features(artifact: dict, features: Dict[str, float], k: int = 5) -> List
     Each entry carries this event's value, and — when a median is known —
     the training-set median and a "direction" (above/below/near, see
     _direction). "source" is "top_k" or "context" depending on why the
-    feature was included; grounding (llm_notes._is_grounded) accepts any
+    feature was included; grounding (llm.notes._is_grounded) accepts any
     feature this function returns, context set included, since the LLM sees
     all of it the same way."""
     model = artifact["model"]
