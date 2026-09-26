@@ -1,5 +1,5 @@
 """
-Unit tests for src.detection.llm_notes — the guardrail logic that decides
+Unit tests for src.detection.llm.notes — the guardrail logic that decides
 whether an LLM's proposed explanation is trusted (schema + grounding checks)
 or discarded for a deterministic template note.
 
@@ -15,7 +15,7 @@ fallback_reason.
 """
 import json
 
-from src.detection import llm_notes
+from src.detection.llm import notes as llm_notes
 
 KNOWN_FEATURES = ["Flow Duration", "Packet Count", "Fwd Packet Length Max"]
 GROUNDED = ["Flow Duration", "Packet Count"]

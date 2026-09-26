@@ -1,116 +1,28 @@
 """
-Unit tests for DetectionSubagent — the borderline-handling loop that makes
-Detection an agent rather than a bare classifier call. classifier.py's
-functions are monkeypatched so no trained model artifact is needed.
+Unit tests for LLMExplanationLayer's connection/timeout/retry/circuit-breaker
+plumbing (src.detection.llm.layer), exercised through DetectionSubagent.
+_call_llm_agent is mocked throughout (it's the only piece that talks to the
+MCP subprocess/smolagents) so these run offline and fast, while exercising
+subagent.py's real gating, validation, and fallback logic.
 
-The LLM-layer tests further down mock LLMExplanationLayer._call_llm_agent (the
-piece that talks to the MCP subprocess/smolagents, now in llm_layer.py — see
-that module for the connection/retry/salvage plumbing) so they run offline
-and fast, while exercising the real validation/fallback/timeout wiring that
-DetectionSubagent delegates to it.
+Split out of the old test_detection_subagent.py — see test_subagent.py
+(core flow + category decision) and test_modes.py (agent vs single_shot,
+salvage) for the rest.
 """
 import json
 import time
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from src.detection.llm_layer import LLMExplanationLayer
-from src.detection.subagent import DetectionSubagent
 from src.shared.schemas import TrafficEvent
-
-
-@pytest.fixture(autouse=True)
-def _default_llm_env(monkeypatch):
-    """Tests must not depend on the real .env's DETECTION_LLM_MODEL/_MODE — many
-    exercise the real dispatch path (LLMExplanationLayer._call_llm_agent is mocked,
-    but resolve_llm_mode()/resolve_llm_model_id() run for real), and mode now
-    defaults based on the model id (ollama_chat/* -> single_shot, else agent — see
-    llm_layer.resolve_llm_mode). Force a deterministic non-Ollama placeholder here
-    so "agent mode" tests actually get agent mode unless a test explicitly
-    overrides DETECTION_LLM_MODEL and/or DETECTION_LLM_MODE itself."""
-    monkeypatch.setenv("DETECTION_LLM_MODEL", "test-provider/test-model")
-    monkeypatch.delenv("DETECTION_LLM_MODE", raising=False)
-
-
-def make_event():
-    return TrafficEvent(features={"duration": 1.0, "packet_count": 2.0})
-
-
-FAKE_ARTIFACT = {"model": None, "feature_names": ["duration", "packet_count"]}
-
-
-@patch("src.detection.classifier.load_artifact", return_value={"model": None, "feature_names": []})
-def make_agent(_mock_load, **kwargs):
-    return DetectionSubagent(model_path="unused", **kwargs)
-
-
-@patch("src.detection.classifier.load_artifact", return_value=FAKE_ARTIFACT)
-def make_llm_agent(_mock_load, **kwargs):
-    """Like make_agent, but with a non-empty feature_names list so
-    top_features (used for the LLM grounding check) has something to rank."""
-    return DetectionSubagent(model_path="unused", use_llm=True, **kwargs)
-
-
-@patch("src.detection.classifier.tree_vote_spread")
-@patch("src.detection.classifier.predict_proba_anomalous")
-def test_clear_anomalous_score_skips_tree_vote_check(mock_predict, mock_votes):
-    mock_predict.return_value = 0.95
-    agent = make_agent()
-
-    result = agent.run(make_event())
-
-    assert result.is_anomalous is True
-    assert result.confidence == 0.95
-    mock_votes.assert_not_called()
-
-
-@patch("src.detection.classifier.tree_vote_spread")
-@patch("src.detection.classifier.predict_proba_anomalous")
-def test_clear_benign_score_skips_tree_vote_check(mock_predict, mock_votes):
-    mock_predict.return_value = 0.05
-    agent = make_agent()
-
-    result = agent.run(make_event())
-
-    assert result.is_anomalous is False
-    assert result.confidence == 0.95
-    mock_votes.assert_not_called()
-
-
-@patch("src.detection.classifier.tree_vote_spread")
-@patch("src.detection.classifier.predict_proba_anomalous")
-def test_borderline_score_triggers_tree_vote_check(mock_predict, mock_votes):
-    mock_predict.return_value = 0.5  # inside [0.4, 0.6]
-    mock_votes.return_value = (0.7, 0.05)  # trees agree, low std
-
-    result = make_agent().run(make_event())
-
-    mock_votes.assert_called_once()
-    assert result.is_anomalous is True
-    assert result.confidence == 0.7
-    assert "trust" in result.detector_notes.lower()
-
-
-@patch("src.detection.classifier.tree_vote_spread")
-@patch("src.detection.classifier.predict_proba_anomalous")
-def test_borderline_score_with_high_tree_disagreement_is_flagged(mock_predict, mock_votes):
-    mock_predict.return_value = 0.5
-    mock_votes.return_value = (0.55, 0.3)  # high std, disagreement
-
-    result = make_agent().run(make_event())
-
-    assert "disagreement" in result.detector_notes.lower()
-
-
-@patch("src.detection.classifier.tree_vote_spread")
-@patch("src.detection.classifier.predict_proba_anomalous")
-def test_run_produces_a_trace_of_its_steps(mock_predict, mock_votes):
-    mock_predict.return_value = 0.9
-    result = make_agent().run(make_event())
-
-    assert len(result.trace) >= 2
-    assert result.trace[0].action == "call_classifier"
+from tests.detection.conftest import (
+    fake_mcp_tools,
+    make_agent,
+    make_event,
+    make_llm_agent,
+    _make_provider_unavailable_error,
+    _make_rate_limit_error,
+    valid_llm_json,
+)
 
 
 # --- LLM layer -----------------------------------------------------------
@@ -118,46 +30,8 @@ def test_run_produces_a_trace_of_its_steps(mock_predict, mock_votes):
 # MCP subprocess/smolagents, so mocking it keeps these tests offline and fast
 # while exercising subagent.py's real gating, validation, and fallback logic.
 
-def valid_llm_json():
-    return json.dumps({
-        "explanation": "duration and packet_count both look elevated for this event.",
-        "tools_used": ["top_features"],
-    })
-
-
-def _make_rate_limit_error():
-    class FakeRateLimitError(Exception):
-        status_code = 429
-    return FakeRateLimitError("rate limited")
-
-
-def _make_provider_unavailable_error():
-    class FakeServiceUnavailableError(Exception):
-        status_code = 503
-    return FakeServiceUnavailableError("service unavailable")
-
-
-def _wrapped_in_agent_generation_error(inner_exc):
-    """Reproduces how smolagents actually surfaces a model-call failure: its
-    agent step catches whatever the model raises and re-raises it as
-    AgentGenerationError with `from e` (smolagents/agents.py), so the real
-    litellm/HTTP error ends up in __cause__, not on the exception our code
-    sees directly. AgentGenerationError's __init__ calls logger.log_error,
-    so it needs a (mock) logger, not a real message-only construction."""
-    from smolagents.utils import AgentGenerationError
-
-    fake_logger = MagicMock()
-    try:
-        raise inner_exc
-    except Exception as e:
-        try:
-            raise AgentGenerationError("Error while generating output", fake_logger) from e
-        except AgentGenerationError as wrapped:
-            return wrapped
-
-
 @patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
-@patch("src.detection.llm_layer.LLMExplanationLayer._call_llm_agent")
+@patch("src.detection.llm.layer.LLMExplanationLayer._call_llm_agent")
 @patch("src.detection.classifier.tree_vote_spread")
 @patch("src.detection.classifier.predict_proba_anomalous")
 def test_use_llm_false_is_unaffected_even_if_llm_would_be_called(
@@ -176,7 +50,7 @@ def test_use_llm_false_is_unaffected_even_if_llm_would_be_called(
     assert result.detector_notes == "[category=Unknown]"
 
 
-@patch("src.detection.llm_layer.LLMExplanationLayer._call_llm_agent")
+@patch("src.detection.llm.layer.LLMExplanationLayer._call_llm_agent")
 @patch("src.detection.classifier.predict_proba_anomalous")
 def test_clear_benign_event_with_use_llm_true_skips_the_llm(mock_predict, mock_call_llm):
     mock_predict.return_value = 0.05  # below LLM_TRIGGER_THRESHOLD (0.4)
@@ -190,7 +64,7 @@ def test_clear_benign_event_with_use_llm_true_skips_the_llm(mock_predict, mock_c
 
 
 @patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
-@patch("src.detection.llm_layer.LLMExplanationLayer._call_llm_agent", return_value=valid_llm_json())
+@patch("src.detection.llm.layer.LLMExplanationLayer._call_llm_agent", return_value=valid_llm_json())
 @patch("src.detection.classifier.predict_proba_anomalous")
 def test_llm_valid_json_produces_categorized_notes_without_changing_numbers(
     mock_predict, mock_call_llm, mock_top_features
@@ -209,7 +83,7 @@ def test_llm_valid_json_produces_categorized_notes_without_changing_numbers(
 
 
 @patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
-@patch("src.detection.llm_layer.LLMExplanationLayer._call_llm_agent", return_value="not valid json")
+@patch("src.detection.llm.layer.LLMExplanationLayer._call_llm_agent", return_value="not valid json")
 @patch("src.detection.classifier.predict_proba_anomalous")
 def test_llm_invalid_json_falls_back_to_template_note(mock_predict, mock_call_llm, mock_top_features):
     mock_predict.return_value = 0.95
@@ -222,7 +96,7 @@ def test_llm_invalid_json_falls_back_to_template_note(mock_predict, mock_call_ll
 
 @patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
 @patch(
-    "src.detection.llm_layer.LLMExplanationLayer._call_llm_agent",
+    "src.detection.llm.layer.LLMExplanationLayer._call_llm_agent",
     return_value=json.dumps({"category": "Ransomware", "explanation": "x", "tools_used": []}),
 )
 @patch("src.detection.classifier.predict_proba_anomalous")
@@ -242,7 +116,7 @@ def test_llm_stray_category_field_in_json_is_ignored_not_validated(
 
 
 @patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
-@patch("src.detection.llm_layer.LLMExplanationLayer._call_llm_agent", side_effect=RuntimeError("MCP server crashed"))
+@patch("src.detection.llm.layer.LLMExplanationLayer._call_llm_agent", side_effect=RuntimeError("MCP server crashed"))
 @patch("src.detection.classifier.predict_proba_anomalous")
 def test_llm_exception_falls_back_and_does_not_raise(mock_predict, mock_call_llm, mock_top_features):
     mock_predict.return_value = 0.95
@@ -267,7 +141,7 @@ def test_llm_timeout_falls_back_and_does_not_raise(mock_predict, mock_top_featur
         return valid_llm_json()
 
     mock_predict.return_value = 0.95
-    with patch("src.detection.llm_layer.LLMExplanationLayer._call_llm_agent", slow_call):
+    with patch("src.detection.llm.layer.LLMExplanationLayer._call_llm_agent", slow_call):
         agent = make_llm_agent(llm_timeout_seconds=0.05)
         sentinel = MagicMock()
         agent._llm._mcp_client = sentinel
@@ -281,7 +155,7 @@ def test_llm_timeout_falls_back_and_does_not_raise(mock_predict, mock_top_featur
 
 
 @patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
-@patch("src.detection.llm_layer.LLMExplanationLayer._call_llm_agent", return_value=valid_llm_json())
+@patch("src.detection.llm.layer.LLMExplanationLayer._call_llm_agent", return_value=valid_llm_json())
 @patch("src.detection.classifier.tree_vote_spread")
 @patch("src.detection.classifier.predict_proba_anomalous")
 def test_llm_success_on_borderline_event_keeps_the_tree_disagreement_note(
@@ -295,26 +169,12 @@ def test_llm_success_on_borderline_event_keeps_the_tree_disagreement_note(
     assert "disagreement" in result.detector_notes.lower()
 
 
-def fake_mcp_tools():
-    """Fake tool objects shaped like the 6 real MCP tools, for tests where
-    MCPClient itself is mocked. Plain MagicMock() attributes, so each is both
-    callable and inspectable via .name (Mock's own `name=` kwarg is reserved
-    for repr, not the attribute, hence setting it after construction)."""
-    tools = []
-    for tool_name in ("register_event", "clear_event", "predict_proba_anomalous",
-                       "tree_vote_spread", "top_features", "predict_attack_category"):
-        tool = MagicMock()
-        tool.name = tool_name
-        tools.append(tool)
-    return tools
-
-
 # --- MCP connection lifecycle ---------------------------------------------
 # Here _call_llm_agent runs for real (not mocked) so _ensure_llm_connection is
 # exercised; only the MCP/smolagents boundary (MCPClient, ToolCallingAgent) is
 # mocked, so no subprocess or real model is involved.
 
-@patch("src.detection.llm_layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
+@patch("src.detection.llm.layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
 @patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
 @patch("smolagents.ToolCallingAgent")
 @patch("smolagents.MCPClient")
@@ -364,7 +224,7 @@ def test_context_manager_closes_connection_on_exit(mock_server_params, mock_mcp_
     mock_mcp_client_cls.return_value.disconnect.assert_called_once()
 
 
-@patch("src.detection.llm_layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
+@patch("src.detection.llm.layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
 @patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
 @patch("smolagents.ToolCallingAgent")
 @patch("smolagents.MCPClient")
@@ -386,7 +246,7 @@ def test_connection_reconnects_on_the_next_event_after_a_failure(
     assert mock_mcp_client_cls.call_count == 2
 
 
-@patch("src.detection.llm_layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
+@patch("src.detection.llm.layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
 @patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
 @patch("smolagents.ToolCallingAgent")
 @patch("smolagents.MCPClient")
@@ -427,7 +287,7 @@ def test_close_disconnects_a_client_abandoned_after_a_timeout(
 # is always offered in agent mode: the LLM may consult it for its own investigation
 # even though code has already made the final category decision from the same tool.
 
-@patch("src.detection.llm_layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
+@patch("src.detection.llm.layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
 @patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
 @patch("smolagents.ToolCallingAgent")
 @patch("smolagents.MCPClient")
@@ -446,7 +306,7 @@ def test_clear_anomalous_event_only_exposes_top_features(
     assert agent_tool_names == {"top_features", "predict_attack_category"}
 
 
-@patch("src.detection.llm_layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
+@patch("src.detection.llm.layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
 @patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
 @patch("smolagents.ToolCallingAgent")
 @patch("smolagents.MCPClient")
@@ -468,7 +328,7 @@ def test_borderline_event_also_exposes_tree_vote_spread(
     assert agent_tool_names == {"top_features", "tree_vote_spread", "predict_attack_category"}
 
 
-@patch("src.detection.llm_layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
+@patch("src.detection.llm.layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
 @patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
 @patch("smolagents.ToolCallingAgent")
 @patch("smolagents.MCPClient")
@@ -487,7 +347,7 @@ def test_agent_mode_exposes_predict_attack_category_for_the_llms_own_use(
     assert "predict_attack_category" in agent_tools_by_name
 
 
-@patch("src.detection.llm_layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
+@patch("src.detection.llm.layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
 @patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
 @patch("smolagents.ToolCallingAgent")
 @patch("smolagents.MCPClient")
@@ -529,7 +389,7 @@ def test_warmup_is_a_noop_when_use_llm_is_false():
     assert result == {"ok": True, "elapsed_seconds": 0.0, "reason": None}
 
 
-@patch("src.detection.llm_layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
+@patch("src.detection.llm.layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
 @patch("smolagents.ToolCallingAgent")
 @patch("smolagents.MCPClient")
 @patch("mcp.StdioServerParameters")
@@ -549,7 +409,7 @@ def test_warmup_opens_the_connection_and_returns_elapsed_seconds(
     assert agent._llm._mcp_client is not None      # ...and left open for the run that follows
 
 
-@patch("src.detection.llm_layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
+@patch("src.detection.llm.layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
 @patch("smolagents.ToolCallingAgent")
 @patch("smolagents.MCPClient")
 @patch("mcp.StdioServerParameters")
@@ -567,8 +427,8 @@ def test_warmup_fails_cleanly_after_a_non_transient_error(
     mock_agent_cls.return_value.run.assert_called_once()  # non-transient: no retries
 
 
-@patch("src.detection.llm_layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
-@patch("src.detection.llm_layer.time.sleep")  # skip real backoff delays
+@patch("src.detection.llm.layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
+@patch("src.detection.llm.layer.time.sleep")  # skip real backoff delays
 @patch("smolagents.ToolCallingAgent")
 @patch("smolagents.MCPClient")
 @patch("mcp.StdioServerParameters")
@@ -588,8 +448,8 @@ def test_warmup_retries_a_transient_error_then_succeeds(
     assert any(step.action == "llm_warmup_retry" for step in agent.get_trace())
 
 
-@patch("src.detection.llm_layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
-@patch("src.detection.llm_layer.time.sleep")
+@patch("src.detection.llm.layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
+@patch("src.detection.llm.layer.time.sleep")
 @patch("smolagents.ToolCallingAgent")
 @patch("smolagents.MCPClient")
 @patch("mcp.StdioServerParameters")
@@ -608,7 +468,7 @@ def test_warmup_fails_after_exhausting_retries_on_persistent_transient_errors(
     assert mock_sleep.call_args_list == [((2.0,),), ((4.0,),), ((8.0,),)]
 
 
-@patch("src.detection.llm_layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
+@patch("src.detection.llm.layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
 @patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
 @patch("smolagents.ToolCallingAgent")
 @patch("smolagents.MCPClient")
@@ -643,7 +503,7 @@ def test_timed_out_calls_steps_are_not_merged_into_the_trace(mock_predict, mock_
         return valid_llm_json()
 
     mock_predict.return_value = 0.95
-    with patch("src.detection.llm_layer.LLMExplanationLayer._call_llm_agent", slow_call):
+    with patch("src.detection.llm.layer.LLMExplanationLayer._call_llm_agent", slow_call):
         agent = make_llm_agent(llm_timeout_seconds=0.02)
         result = agent.run(make_event())
 
@@ -661,10 +521,10 @@ def test_abandoned_threads_steps_never_appear_in_a_later_events_trace(mock_predi
     mock_predict.return_value = 0.95
     agent = make_llm_agent(llm_timeout_seconds=0.02)
 
-    with patch("src.detection.llm_layer.LLMExplanationLayer._call_llm_agent", slow_call):
+    with patch("src.detection.llm.layer.LLMExplanationLayer._call_llm_agent", slow_call):
         first = agent.run(make_event())  # times out
 
-    with patch("src.detection.llm_layer.LLMExplanationLayer._call_llm_agent", return_value=valid_llm_json()):
+    with patch("src.detection.llm.layer.LLMExplanationLayer._call_llm_agent", return_value=valid_llm_json()):
         second = agent.run(make_event())  # fresh event, fast success
 
     assert not any(step.action == "should_never_leak" for step in first.trace)
@@ -674,7 +534,7 @@ def test_abandoned_threads_steps_never_appear_in_a_later_events_trace(mock_predi
 # --- circuit breaker ---------------------------------------------------------
 
 @patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
-@patch("src.detection.llm_layer.LLMExplanationLayer._call_llm_agent", side_effect=RuntimeError("dead"))
+@patch("src.detection.llm.layer.LLMExplanationLayer._call_llm_agent", side_effect=RuntimeError("dead"))
 @patch("src.detection.classifier.predict_proba_anomalous")
 def test_circuit_opens_after_threshold_consecutive_failures_and_skips_further_llm_calls(
     mock_predict, mock_call_llm, mock_top_features
@@ -695,7 +555,7 @@ def test_circuit_opens_after_threshold_consecutive_failures_and_skips_further_ll
 
 
 @patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
-@patch("src.detection.llm_layer.LLMExplanationLayer._call_llm_agent")
+@patch("src.detection.llm.layer.LLMExplanationLayer._call_llm_agent")
 @patch("src.detection.classifier.predict_proba_anomalous")
 def test_a_success_resets_the_consecutive_failure_count(mock_predict, mock_call_llm, mock_top_features):
     mock_predict.return_value = 0.95
@@ -714,9 +574,9 @@ def test_a_success_resets_the_consecutive_failure_count(mock_predict, mock_call_
 # retry loop in _call_llm_agent runs; time.sleep is mocked so backoff delays
 # don't slow the test down.
 
-@patch("src.detection.llm_layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
+@patch("src.detection.llm.layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
 @patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
-@patch("src.detection.llm_layer.time.sleep")
+@patch("src.detection.llm.layer.time.sleep")
 @patch("smolagents.ToolCallingAgent")
 @patch("smolagents.MCPClient")
 @patch("mcp.StdioServerParameters")
@@ -740,9 +600,9 @@ def test_per_event_call_retries_a_rate_limit_then_succeeds_without_dropping_the_
     assert agent._llm._mcp_client is not None
 
 
-@patch("src.detection.llm_layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
+@patch("src.detection.llm.layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
 @patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
-@patch("src.detection.llm_layer.time.sleep")
+@patch("src.detection.llm.layer.time.sleep")
 @patch("smolagents.ToolCallingAgent")
 @patch("smolagents.MCPClient")
 @patch("mcp.StdioServerParameters")
@@ -755,7 +615,7 @@ def test_per_event_rate_limit_exhausting_retries_reports_rate_limited_fallback_r
     mock_mcp_client_cls.return_value.get_tools.return_value = fake_mcp_tools()
     mock_agent_cls.return_value.run.side_effect = [_make_rate_limit_error() for _ in range(4)]
 
-    from src.detection.llm_layer import FALLBACK_REASON_BY_ACTION
+    from src.detection.llm.layer import FALLBACK_REASON_BY_ACTION
 
     agent = make_llm_agent()
     result = agent.run(make_event())
@@ -766,9 +626,9 @@ def test_per_event_rate_limit_exhausting_retries_reports_rate_limited_fallback_r
     assert agent._llm._mcp_client is not None  # provider-side: connection kept, not disconnected
 
 
-@patch("src.detection.llm_layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
+@patch("src.detection.llm.layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
 @patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
-@patch("src.detection.llm_layer.time.sleep")
+@patch("src.detection.llm.layer.time.sleep")
 @patch("smolagents.ToolCallingAgent")
 @patch("smolagents.MCPClient")
 @patch("mcp.StdioServerParameters")
@@ -781,7 +641,7 @@ def test_per_event_service_unavailable_reports_provider_unavailable_fallback_rea
     mock_mcp_client_cls.return_value.get_tools.return_value = fake_mcp_tools()
     mock_agent_cls.return_value.run.side_effect = [_make_provider_unavailable_error() for _ in range(4)]
 
-    from src.detection.llm_layer import FALLBACK_REASON_BY_ACTION
+    from src.detection.llm.layer import FALLBACK_REASON_BY_ACTION
 
     agent = make_llm_agent()
     result = agent.run(make_event())
@@ -791,10 +651,10 @@ def test_per_event_service_unavailable_reports_provider_unavailable_fallback_rea
 
 
 @patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
-@patch("src.detection.llm_layer.LLMExplanationLayer._call_llm_agent", side_effect=RuntimeError("broken pipe"))
+@patch("src.detection.llm.layer.LLMExplanationLayer._call_llm_agent", side_effect=RuntimeError("broken pipe"))
 @patch("src.detection.classifier.predict_proba_anomalous")
 def test_non_transient_exception_still_disconnects_the_connection(mock_predict, mock_call_llm, mock_top_features):
-    from src.detection.llm_layer import FALLBACK_REASON_BY_ACTION
+    from src.detection.llm.layer import FALLBACK_REASON_BY_ACTION
 
     mock_predict.return_value = 0.95
     agent = make_llm_agent()
@@ -818,7 +678,7 @@ def test_llm_dispatch_is_logged_even_when_the_call_times_out(mock_predict, mock_
         return valid_llm_json()
 
     mock_predict.return_value = 0.95
-    with patch("src.detection.llm_layer.LLMExplanationLayer._call_llm_agent", slow_call):
+    with patch("src.detection.llm.layer.LLMExplanationLayer._call_llm_agent", slow_call):
         agent = make_llm_agent(llm_timeout_seconds=0.02)
         result = agent.run(make_event())
 
@@ -828,7 +688,7 @@ def test_llm_dispatch_is_logged_even_when_the_call_times_out(mock_predict, mock_
     assert not any(step.action == "llm_layer_start" for step in result.trace)
 
 
-@patch("src.detection.llm_layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
+@patch("src.detection.llm.layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
 @patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
 @patch("smolagents.ToolCallingAgent")
 @patch("smolagents.MCPClient")
@@ -858,10 +718,29 @@ def test_token_usage_is_recorded_after_a_successful_llm_call(
 # status_code) is one level down in __cause__, not on the exception our code
 # is handed. _classify_llm_error must walk that chain to classify correctly.
 
+def _wrapped_in_agent_generation_error(inner_exc):
+    """Reproduces how smolagents actually surfaces a model-call failure: its
+    agent step catches whatever the model raises and re-raises it as
+    AgentGenerationError with `from e` (smolagents/agents.py), so the real
+    litellm/HTTP error ends up in __cause__, not on the exception our code
+    sees directly. AgentGenerationError's __init__ calls logger.log_error,
+    so it needs a (mock) logger, not a real message-only construction."""
+    from smolagents.utils import AgentGenerationError
+
+    fake_logger = MagicMock()
+    try:
+        raise inner_exc
+    except Exception as e:
+        try:
+            raise AgentGenerationError("Error while generating output", fake_logger) from e
+        except AgentGenerationError as wrapped:
+            return wrapped
+
+
 def test_classify_llm_error_unwraps_rate_limit_through_agent_generation_error():
     import litellm
 
-    from src.detection.llm_layer import _classify_llm_error
+    from src.detection.llm.layer import _classify_llm_error
 
     inner = litellm.exceptions.RateLimitError(message="x", llm_provider="gemini", model="m")
     wrapped = _wrapped_in_agent_generation_error(inner)
@@ -872,7 +751,7 @@ def test_classify_llm_error_unwraps_rate_limit_through_agent_generation_error():
 def test_classify_llm_error_unwraps_service_unavailable_through_agent_generation_error():
     import litellm
 
-    from src.detection.llm_layer import _classify_llm_error
+    from src.detection.llm.layer import _classify_llm_error
 
     inner = litellm.exceptions.ServiceUnavailableError(message="x", llm_provider="gemini", model="m")
     wrapped = _wrapped_in_agent_generation_error(inner)
@@ -883,7 +762,7 @@ def test_classify_llm_error_unwraps_service_unavailable_through_agent_generation
 def test_classify_llm_error_unwraps_authentication_error_as_not_transient():
     import litellm
 
-    from src.detection.llm_layer import _classify_llm_error
+    from src.detection.llm.layer import _classify_llm_error
 
     inner = litellm.exceptions.AuthenticationError(message="x", llm_provider="gemini", model="m")
     wrapped = _wrapped_in_agent_generation_error(inner)
@@ -893,9 +772,9 @@ def test_classify_llm_error_unwraps_authentication_error_as_not_transient():
 
 # --- same, end-to-end through a per-event call ------------------------------
 
-@patch("src.detection.llm_layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
+@patch("src.detection.llm.layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
 @patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
-@patch("src.detection.llm_layer.time.sleep")
+@patch("src.detection.llm.layer.time.sleep")
 @patch("smolagents.ToolCallingAgent")
 @patch("smolagents.MCPClient")
 @patch("mcp.StdioServerParameters")
@@ -906,7 +785,7 @@ def test_wrapped_rate_limit_is_retried_and_keeps_the_connection(
 ):
     import litellm
 
-    from src.detection.llm_layer import FALLBACK_REASON_BY_ACTION
+    from src.detection.llm.layer import FALLBACK_REASON_BY_ACTION
 
     mock_predict.return_value = 0.95
     mock_mcp_client_cls.return_value.get_tools.return_value = fake_mcp_tools()
@@ -924,9 +803,9 @@ def test_wrapped_rate_limit_is_retried_and_keeps_the_connection(
     assert agent._llm._mcp_client is not None
 
 
-@patch("src.detection.llm_layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
+@patch("src.detection.llm.layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
 @patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
-@patch("src.detection.llm_layer.time.sleep")
+@patch("src.detection.llm.layer.time.sleep")
 @patch("smolagents.ToolCallingAgent")
 @patch("smolagents.MCPClient")
 @patch("mcp.StdioServerParameters")
@@ -937,7 +816,7 @@ def test_wrapped_service_unavailable_exhausting_retries_keeps_the_connection(
 ):
     import litellm
 
-    from src.detection.llm_layer import FALLBACK_REASON_BY_ACTION
+    from src.detection.llm.layer import FALLBACK_REASON_BY_ACTION
 
     mock_predict.return_value = 0.95
     mock_mcp_client_cls.return_value.get_tools.return_value = fake_mcp_tools()
@@ -956,9 +835,9 @@ def test_wrapped_service_unavailable_exhausting_retries_keeps_the_connection(
     assert agent._llm._mcp_client is not None
 
 
-@patch("src.detection.llm_layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
+@patch("src.detection.llm.layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
 @patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
-@patch("src.detection.llm_layer.time.sleep")
+@patch("src.detection.llm.layer.time.sleep")
 @patch("smolagents.ToolCallingAgent")
 @patch("smolagents.MCPClient")
 @patch("mcp.StdioServerParameters")
@@ -969,7 +848,7 @@ def test_wrapped_authentication_error_is_not_retried_and_disconnects(
 ):
     import litellm
 
-    from src.detection.llm_layer import FALLBACK_REASON_BY_ACTION
+    from src.detection.llm.layer import FALLBACK_REASON_BY_ACTION
 
     mock_predict.return_value = 0.95
     mock_mcp_client_cls.return_value.get_tools.return_value = fake_mcp_tools()
@@ -986,72 +865,6 @@ def test_wrapped_authentication_error_is_not_retried_and_disconnects(
     assert agent._llm._mcp_client is None  # not a recognized provider error: connection dropped
 
 
-# --- salvage path: model answered in plain text instead of via final_answer -
-# When ToolCallingAgent exhausts max_steps without ever calling final_answer
-# (e.g. a small model just typed its JSON answer as a chat message), smolagents
-# itself falls back to one direct generation and returns that raw text as-is —
-# often the right JSON with some stray prose around it. _run_llm_layer re-runs
-# parse_and_validate on an extracted {...} substring before giving up.
-
-@patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
-@patch(
-    "src.detection.llm_layer.LLMExplanationLayer._call_llm_agent",
-    return_value='Sure, based on my investigation, here is the result: ' + valid_llm_json() + ' Hope that helps!',
-)
-@patch("src.detection.classifier.predict_proba_anomalous")
-def test_salvage_path_extracts_json_from_surrounding_prose(mock_predict, mock_call_llm, mock_top_features):
-    from src.detection.llm_layer import FALLBACK_REASON_BY_ACTION
-
-    mock_predict.return_value = 0.95
-    result = make_llm_agent().run(make_event())
-
-    assert result.is_anomalous is True
-    assert result.confidence == 0.95  # unchanged by the salvage path
-    assert result.detector_notes.startswith("[category=Unknown]")
-    assert any(step.action == "llm_validation_salvaged" for step in result.trace)
-    assert not any(step.action == "llm_validation_passed" for step in result.trace)
-    fallback_actions = [FALLBACK_REASON_BY_ACTION[s.action] for s in result.trace if s.action in FALLBACK_REASON_BY_ACTION]
-    assert fallback_actions == ["salvaged"]
-
-
-@patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
-@patch(
-    "src.detection.llm_layer.LLMExplanationLayer._call_llm_agent",
-    return_value="I'm not sure how to answer that question.",
-)
-@patch("src.detection.classifier.predict_proba_anomalous")
-def test_salvage_path_gives_up_when_no_json_is_present(mock_predict, mock_call_llm, mock_top_features):
-    from src.detection.llm_layer import FALLBACK_REASON_BY_ACTION
-
-    mock_predict.return_value = 0.95
-    result = make_llm_agent().run(make_event())
-
-    assert "category=Unknown" in result.detector_notes
-    fallback_actions = [FALLBACK_REASON_BY_ACTION[s.action] for s in result.trace if s.action in FALLBACK_REASON_BY_ACTION]
-    assert fallback_actions == ["invalid_json"]  # extraction found nothing to salvage
-
-
-@patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
-@patch(
-    "src.detection.llm_layer.LLMExplanationLayer._call_llm_agent",
-    return_value='My answer: {"category": "Ransomware", "explanation": "x", "tools_used": []}',
-)
-@patch("src.detection.classifier.predict_proba_anomalous")
-def test_salvage_path_ignores_a_stray_category_field_in_the_salvaged_json(mock_predict, mock_call_llm, mock_top_features):
-    from src.detection.llm_layer import FALLBACK_REASON_BY_ACTION
-
-    mock_predict.return_value = 0.95
-    result = make_llm_agent().run(make_event())
-
-    # A stray "category" in the salvaged content has no schema slot to violate — it's simply
-    # ignored, same as it would be in a clean (non-salvaged) answer. The code-side decision
-    # ("Unknown", no category model loaded) still wins, and the salvage itself succeeds.
-    assert "category=Unknown" in result.detector_notes
-    assert "x" in result.detector_notes
-    fallback_actions = [FALLBACK_REASON_BY_ACTION[s.action] for s in result.trace if s.action in FALLBACK_REASON_BY_ACTION]
-    assert fallback_actions == ["salvaged"]
-
-
 # --- diagnostics: raw text of failed steps + forced final answer ------------
 # _log_agent_memory_diagnostics inspects agent.memory.steps (real ActionStep
 # objects, not the mocked agent itself) after agent.run() returns, so a real
@@ -1066,7 +879,7 @@ def _make_action_step(step_number, error=None, model_output=None, is_final_answe
     )
 
 
-@patch("src.detection.llm_layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
+@patch("src.detection.llm.layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
 @patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
 @patch("smolagents.ToolCallingAgent")
 @patch("smolagents.MCPClient")
@@ -1104,7 +917,7 @@ def test_failed_steps_and_forced_final_answer_are_logged(
     assert result.detector_notes.startswith("[category=Unknown]")  # salvaged from the forced answer's prose
 
 
-@patch("src.detection.llm_layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
+@patch("src.detection.llm.layer.LLMExplanationLayer._get_llm_model", return_value="fake-model")
 @patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
 @patch("smolagents.ToolCallingAgent")
 @patch("smolagents.MCPClient")
@@ -1125,365 +938,3 @@ def test_no_diagnostics_logged_when_final_answer_tool_was_used_cleanly(
 
     assert not any(s.action in ("llm_step_failed", "llm_forced_final_answer") for s in result.trace)
     assert any(s.action == "llm_validation_passed" for s in result.trace)
-
-
-# --- DETECTION_LLM_MODE=single_shot -----------------------------------------
-# litellm's own ollama transformation drops tool_choice entirely ("causes ollama
-# requests to hang" — see subagent.py's DEFAULT_LLM_MODE comment), so the agent
-# loop's "every step must be a tool call" requirement can't be forced onto a
-# small local model. single_shot instead has code call top_features (and
-# tree_vote_spread, if borderline) directly, then makes one litellm.completion
-# call with response_format's json_schema — verified for real against Ollama.
-
-def _fake_litellm_response(content, prompt_tokens=10, completion_tokens=20):
-    from types import SimpleNamespace
-
-    message = SimpleNamespace(content=content)
-    choice = SimpleNamespace(message=message)
-    usage = SimpleNamespace(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
-    return SimpleNamespace(choices=[choice], usage=usage)
-
-
-def test_resolve_llm_mode_defaults_to_agent(monkeypatch):
-    from src.detection.llm_layer import resolve_llm_mode
-
-    monkeypatch.delenv("DETECTION_LLM_MODE", raising=False)
-    assert resolve_llm_mode() == "agent"
-
-
-def test_resolve_llm_mode_reads_env_var(monkeypatch):
-    from src.detection.llm_layer import resolve_llm_mode
-
-    monkeypatch.setenv("DETECTION_LLM_MODE", "single_shot")
-    assert resolve_llm_mode() == "single_shot"
-
-
-def test_resolve_llm_mode_falls_back_to_agent_on_invalid_value(monkeypatch):
-    from src.detection.llm_layer import resolve_llm_mode
-
-    monkeypatch.setenv("DETECTION_LLM_MODE", "bogus")
-    assert resolve_llm_mode() == "agent"
-
-
-def test_resolve_llm_mode_defaults_to_single_shot_for_an_ollama_model(monkeypatch):
-    from src.detection.llm_layer import resolve_llm_mode
-
-    monkeypatch.delenv("DETECTION_LLM_MODE", raising=False)
-    monkeypatch.setenv("DETECTION_LLM_MODEL", "ollama_chat/qwen2.5:3b")
-    assert resolve_llm_mode() == "single_shot"
-
-
-def test_resolve_llm_mode_env_var_override_wins_even_for_an_ollama_model(monkeypatch):
-    from src.detection.llm_layer import resolve_llm_mode
-
-    monkeypatch.setenv("DETECTION_LLM_MODEL", "ollama_chat/qwen2.5:3b")
-    monkeypatch.setenv("DETECTION_LLM_MODE", "agent")
-    assert resolve_llm_mode() == "agent"
-
-
-def test_unwrap_mcp_result_unwraps_the_result_key():
-    assert LLMExplanationLayer._unwrap_mcp_result({"result": [1, 2, 3]}) == [1, 2, 3]
-
-
-def test_unwrap_mcp_result_passes_through_an_object_shaped_result():
-    value = {"vote_fraction": 0.5, "vote_std": 0.1}
-    assert LLMExplanationLayer._unwrap_mcp_result(value) is value
-
-
-@patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
-@patch("litellm.completion")
-@patch("smolagents.MCPClient")
-@patch("mcp.StdioServerParameters")
-@patch("src.detection.classifier.predict_proba_anomalous")
-def test_single_shot_mode_calls_top_features_directly_with_no_agent_loop(
-    mock_predict, mock_server_params, mock_mcp_client_cls, mock_completion, mock_top_features, monkeypatch
-):
-    monkeypatch.setenv("DETECTION_LLM_MODE", "single_shot")
-    mock_predict.return_value = 0.95
-    tools = fake_mcp_tools()
-    top_features_tool = next(t for t in tools if t.name == "top_features")
-    top_features_tool.return_value = {"result": [{"name": "duration", "value": 1.0, "median": None}]}
-    mock_mcp_client_cls.return_value.get_tools.return_value = tools
-    mock_completion.return_value = _fake_litellm_response(valid_llm_json())
-
-    with patch("smolagents.ToolCallingAgent") as mock_agent_cls:
-        result = make_llm_agent().run(make_event())
-        mock_agent_cls.assert_not_called()  # single_shot never builds a ToolCallingAgent
-
-    assert result.detector_notes.startswith("[category=Unknown]")
-    top_features_tool.assert_called_once()
-    mock_completion.assert_called_once()
-    call_kwargs = mock_completion.call_args.kwargs
-    assert call_kwargs["response_format"]["type"] == "json_schema"
-    assert "duration" in str(call_kwargs["messages"])  # feature data embedded in the prompt
-
-
-@patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
-@patch("litellm.completion")
-@patch("smolagents.MCPClient")
-@patch("mcp.StdioServerParameters")
-@patch("src.detection.classifier.tree_vote_spread")
-@patch("src.detection.classifier.predict_proba_anomalous")
-def test_single_shot_mode_includes_tree_vote_spread_when_borderline(
-    mock_predict, mock_votes, mock_server_params, mock_mcp_client_cls, mock_completion,
-    mock_top_features, monkeypatch,
-):
-    monkeypatch.setenv("DETECTION_LLM_MODE", "single_shot")
-    mock_predict.return_value = 0.5
-    mock_votes.return_value = (0.55, 0.1)
-    tools = fake_mcp_tools()
-    next(t for t in tools if t.name == "top_features").return_value = {"result": []}
-    vote_tool = next(t for t in tools if t.name == "tree_vote_spread")
-    vote_tool.return_value = {"vote_fraction": 0.55, "vote_std": 0.1}
-    mock_mcp_client_cls.return_value.get_tools.return_value = tools
-    mock_completion.return_value = _fake_litellm_response(valid_llm_json())
-
-    make_llm_agent().run(make_event())
-
-    vote_tool.assert_called_once()
-    call_kwargs = mock_completion.call_args.kwargs
-    assert "vote_fraction" in str(call_kwargs["messages"])
-
-
-@patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
-@patch("litellm.completion")
-@patch("smolagents.MCPClient")
-@patch("mcp.StdioServerParameters")
-@patch("src.detection.classifier.predict_proba_anomalous")
-def test_single_shot_mode_records_token_usage(
-    mock_predict, mock_server_params, mock_mcp_client_cls, mock_completion, mock_top_features, monkeypatch
-):
-    monkeypatch.setenv("DETECTION_LLM_MODE", "single_shot")
-    mock_predict.return_value = 0.95
-    tools = fake_mcp_tools()
-    next(t for t in tools if t.name == "top_features").return_value = {"result": []}
-    mock_mcp_client_cls.return_value.get_tools.return_value = tools
-    mock_completion.return_value = _fake_litellm_response(valid_llm_json(), prompt_tokens=42, completion_tokens=17)
-
-    result = make_llm_agent().run(make_event())
-
-    usage_step = next(s for s in result.trace if s.action == "llm_token_usage")
-    assert usage_step.tool_input == {"prompt_tokens": 42, "completion_tokens": 17}
-
-
-@patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
-@patch("src.detection.llm_layer.time.sleep")
-@patch("litellm.completion")
-@patch("smolagents.MCPClient")
-@patch("mcp.StdioServerParameters")
-@patch("src.detection.classifier.predict_proba_anomalous")
-def test_single_shot_mode_retries_a_transient_error_then_succeeds(
-    mock_predict, mock_server_params, mock_mcp_client_cls, mock_completion, mock_sleep,
-    mock_top_features, monkeypatch,
-):
-    monkeypatch.setenv("DETECTION_LLM_MODE", "single_shot")
-    mock_predict.return_value = 0.95
-    tools = fake_mcp_tools()
-    next(t for t in tools if t.name == "top_features").return_value = {"result": []}
-    mock_mcp_client_cls.return_value.get_tools.return_value = tools
-    mock_completion.side_effect = [_make_rate_limit_error(), _fake_litellm_response(valid_llm_json())]
-
-    result = make_llm_agent().run(make_event())
-
-    assert result.detector_notes.startswith("[category=Unknown]")
-    assert mock_completion.call_count == 2
-    mock_sleep.assert_called_once_with(2.0)
-
-
-@patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])
-@patch("src.detection.llm_layer.LLMExplanationLayer._call_llm_agent", return_value=valid_llm_json())
-@patch("src.detection.classifier.predict_proba_anomalous")
-def test_llm_dispatch_step_records_the_resolved_mode(mock_predict, mock_call_llm, mock_top_features, monkeypatch):
-    monkeypatch.setenv("DETECTION_LLM_MODE", "single_shot")
-    mock_predict.return_value = 0.95
-    result = make_llm_agent().run(make_event())
-
-    dispatch_step = next(s for s in result.trace if s.action == "llm_dispatch")
-    assert dispatch_step.tool_input["mode"] == "single_shot"
-
-
-# --- _choose_category: the deterministic category decision -------------------
-# Same principle as is_anomalous/confidence: code, not the LLM, decides the
-# category. These tests configure a real category artifact (unlike the rest of
-# this file, which always falls back to "Unknown" with no artifact loaded).
-
-def _make_category_artifact(classes_and_probas):
-    """A fake category_model whose predict_proba always returns the given
-    (class, probability) pairs, in that order, regardless of input."""
-    classes = [c for c, _ in classes_and_probas]
-    probas = [p for _, p in classes_and_probas]
-    model = MagicMock()
-    model.classes_ = classes
-    model.predict_proba.return_value = [probas]
-    return {"category_model": model, "classes": classes, "feature_names": ["duration", "packet_count"]}
-
-
-@patch("src.detection.classifier.load_artifact")
-def make_agent_with_category_model(classes_and_probas, mock_load, **kwargs):
-    # patch() appends the mock as the last positional arg (after ones the
-    # caller passes explicitly), so classes_and_probas must come first here.
-    binary_artifact = {"model": None, "feature_names": ["duration", "packet_count"]}
-    category_artifact = _make_category_artifact(classes_and_probas)
-    mock_load.side_effect = [binary_artifact, category_artifact]
-    return DetectionSubagent(model_path="unused", **kwargs)
-
-
-@patch("src.detection.classifier.predict_proba_anomalous")
-def test_choose_category_uses_top_class_when_above_threshold(mock_predict):
-    mock_predict.return_value = 0.95
-    # Explicit threshold: this test's story (a probability clearly above the threshold is
-    # trusted) shouldn't depend on whatever DEFAULT_CATEGORY_CONFIDENCE_THRESHOLD happens to be.
-    agent = make_agent_with_category_model(
-        [("DDoS", 0.9), ("PortScan", 0.1)], category_confidence_threshold=0.6,
-    )
-
-    result = agent.run(make_event())
-
-    assert result.detector_notes == "[category=DDoS]"
-
-
-@patch("src.detection.classifier.predict_proba_anomalous")
-def test_choose_category_falls_back_to_unknown_below_threshold(mock_predict):
-    mock_predict.return_value = 0.95
-    agent = make_agent_with_category_model(
-        [("DDoS", 0.55), ("PortScan", 0.45)], category_confidence_threshold=0.6,
-    )
-
-    result = agent.run(make_event())
-
-    assert result.detector_notes == "[category=Unknown]"
-
-
-@patch("src.detection.classifier.predict_proba_anomalous")
-def test_choose_category_threshold_is_configurable(mock_predict):
-    mock_predict.return_value = 0.95
-    agent = make_agent_with_category_model(
-        [("DDoS", 0.55), ("PortScan", 0.45)], category_confidence_threshold=0.5,
-    )
-
-    result = agent.run(make_event())
-
-    assert result.detector_notes == "[category=DDoS]"  # 0.55 clears a lowered 0.5 threshold
-
-
-@patch("src.detection.classifier.predict_proba_anomalous")
-def test_choose_category_at_exactly_the_threshold_is_accepted(mock_predict):
-    mock_predict.return_value = 0.95
-    agent = make_agent_with_category_model(
-        [("DDoS", 0.6), ("PortScan", 0.4)], category_confidence_threshold=0.6,
-    )
-
-    result = agent.run(make_event())
-
-    assert result.detector_notes == "[category=DDoS]"
-
-
-@patch("src.detection.classifier.predict_proba_anomalous")
-def test_benign_event_gets_no_category_tag_even_with_a_category_model_loaded(mock_predict):
-    mock_predict.return_value = 0.05  # clearly benign
-    agent = make_agent_with_category_model([("DDoS", 0.9), ("PortScan", 0.1)])
-
-    result = agent.run(make_event())
-
-    assert result.is_anomalous is False
-    assert result.detector_notes is None
-
-
-@patch("src.detection.classifier.predict_proba_anomalous")
-def test_category_decision_trace_step_records_chosen_and_raw_top_and_threshold(mock_predict):
-    mock_predict.return_value = 0.95
-    agent = make_agent_with_category_model(
-        [("DDoS", 0.55), ("PortScan", 0.45)], category_confidence_threshold=0.6,
-    )
-
-    result = agent.run(make_event())
-
-    step = next(s for s in result.trace if s.action == "category_decision")
-    assert step.tool_input == {
-        "chosen_category": "Unknown",
-        "raw_top_category": "DDoS",
-        "raw_top_probability": 0.55,
-        "threshold": 0.6,
-    }
-
-
-@patch("src.detection.classifier.predict_proba_anomalous")
-def test_category_model_unavailable_is_logged_as_its_own_trace_step(mock_predict):
-    # make_agent() (no category artifact) hits the FileNotFoundError branch of
-    # _load_category_artifact, so _choose_category takes the "no model" path.
-    mock_predict.return_value = 0.95
-    result = make_agent().run(make_event())
-
-    assert any(s.action == "category_model_unavailable" for s in result.trace)
-    assert not any(s.action == "category_decision" for s in result.trace)
-
-
-# --- Benign class / binary-category model disagreement -----------------------
-# train_category.py now trains an explicit "Benign" class alongside the attack
-# categories (see its module docstring): when it's the category model's top
-# vote for an event the BINARY model already called anomalous, that's a
-# disagreement between the two models — reported as "Unknown" (never
-# "Benign", which would contradict is_anomalous=True) and logged as its own
-# "model_disagreement" trace step, distinct from an ordinary below-threshold
-# "Unknown" (see test_choose_category_falls_back_to_unknown_below_threshold).
-
-@patch("src.detection.classifier.predict_proba_anomalous")
-def test_choose_category_reports_unknown_when_category_model_votes_benign(mock_predict):
-    mock_predict.return_value = 0.95  # binary model: anomalous
-    agent = make_agent_with_category_model([("Benign", 0.99), ("DDoS", 0.01)])
-
-    result = agent.run(make_event())
-
-    assert result.is_anomalous is True
-    assert result.detector_notes == "[category=Unknown]"
-
-
-@patch("src.detection.classifier.predict_proba_anomalous")
-def test_benign_top_vote_is_logged_as_model_disagreement_not_category_decision(mock_predict):
-    mock_predict.return_value = 0.95
-    agent = make_agent_with_category_model(
-        [("Benign", 0.99), ("DDoS", 0.01)], category_confidence_threshold=0.6,
-    )
-
-    result = agent.run(make_event())
-
-    disagreement_steps = [s for s in result.trace if s.action == "model_disagreement"]
-    assert len(disagreement_steps) == 1
-    assert disagreement_steps[0].tool_input == {
-        "chosen_category": "Unknown", "raw_top_category": "Benign",
-        "raw_top_probability": 0.99, "threshold": 0.6,
-    }
-    assert not any(s.action == "category_decision" for s in result.trace)
-
-
-@patch("src.detection.classifier.predict_proba_anomalous")
-def test_benign_top_vote_disagreement_is_reported_even_above_the_confidence_threshold(mock_predict):
-    # A high-confidence Benign vote is still a disagreement, not a trustworthy category —
-    # the confidence threshold only governs which ATTACK category to trust, it never makes
-    # "Benign" an acceptable answer for an event the binary model called anomalous.
-    mock_predict.return_value = 0.95
-    agent = make_agent_with_category_model(
-        [("Benign", 0.99), ("DDoS", 0.01)], category_confidence_threshold=0.1,
-    )
-
-    result = agent.run(make_event())
-
-    assert result.detector_notes == "[category=Unknown]"
-    assert any(s.action == "model_disagreement" for s in result.trace)
-
-
-# --- assert_feature_names_match is enforced at construction time -------------
-
-@patch(
-    "src.detection.classifier.load_artifact",
-    side_effect=[
-        {"model": None, "feature_names": ["duration", "packet_count"]},
-        {"category_model": MagicMock(), "classes": ["DDoS"], "feature_names": ["duration"]},
-    ],
-)
-def test_mismatched_feature_names_between_artifacts_raises_on_construction(_mock_load):
-    try:
-        DetectionSubagent(model_path="unused")
-        assert False, "expected a ValueError for mismatched feature_names"
-    except ValueError as exc:
-        assert "feature_names" in str(exc) or "feature set" in str(exc).lower()

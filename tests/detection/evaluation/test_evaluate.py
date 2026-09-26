@@ -1,5 +1,5 @@
 """
-Unit tests for src.detection.evaluate's pure per-event reporting helpers —
+Unit tests for src.detection.evaluation.evaluate's pure per-event reporting helpers —
 _fallback_reason, _token_usage, _llm_diagnostics, _llm_mode, _category_decision,
 and run_arm's "valid" definition (clean pass OR salvaged). These operate on a
 DetectionResult trace (a list of TraceStep), so a fake manager/event stands in
@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.detection import evaluate
+from src.detection.evaluation import evaluate
 from src.shared.schemas import DetectionResult, TraceStep, TrafficEvent
 
 

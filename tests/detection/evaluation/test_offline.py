@@ -1,5 +1,5 @@
 """
-Unit tests for src.detection.offline_eval's batch (no-LLM, no per-event agent
+Unit tests for src.detection.evaluation.offline's batch (no-LLM, no per-event agent
 loop) metrics and the CATEGORY_CONFIDENCE_THRESHOLD sweep. All synthetic,
 small, in-memory data — no real dataset, no trained artifact files.
 """
@@ -8,7 +8,8 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from src.detection import classifier, offline_eval
+from src.detection import classifier
+from src.detection.evaluation import offline as offline_eval
 
 
 def _fake_binary_artifact(proba_anomalous):

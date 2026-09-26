@@ -1,5 +1,5 @@
 """
-Unit tests for src.detection.mcp_server's tool functions. `@mcp.tool()`
+Unit tests for src.detection.llm.tool_server's tool functions. `@mcp.tool()`
 doesn't wrap the underlying function, so these are called directly — no MCP
 client, subprocess, or transport involved. The artifact is lazily loaded via
 _get_artifact(), so tests set mcp_server._artifact to a small fake artifact
@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 from sklearn.ensemble import RandomForestClassifier
 
-from src.detection import mcp_server
+from src.detection.llm import tool_server as mcp_server
 
 FEATURE_NAMES = ["duration", "packet_count"]
 
