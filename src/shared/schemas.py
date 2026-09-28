@@ -61,11 +61,46 @@ class MitigationRecommendation:
 
 
 @dataclass
+class JudgeInput:
+    """What the Judge receives: both managers' conclusions.
+
+    `mitigation` is None when the Mitigation Manager failed or isn't available;
+    `mitigation_error` then says why, so the Judge can handle incomplete input
+    explicitly instead of crashing.
+    """
+    detection: DetectionResult
+    mitigation: Optional[MitigationRecommendation] = None
+    mitigation_error: Optional[str] = None
+
+
+@dataclass
 class ResponseRecommendation:
-    """Output of the Judge Agent — the pipeline's final result."""
-    correlation: CorrelationResult
+    """Output of the Judge Agent: the pipeline's final result."""
+    detection: DetectionResult
+    mitigation: Optional[MitigationRecommendation]
     recommended_action: str
     agents_agree: bool
     escalated_to_human: bool = False
+    case: Optional[str] = None           # which decision case applied (for evaluation)
     reasoning: Optional[str] = None
     trace: List[TraceStep] = field(default_factory=list)
+
+
+@dataclass
+class PipelineRun:
+    """Everything that happened for one event: what the UI shows and what the
+    report's latency/cost numbers come from.
+
+    `errors` and `timings_ms` are keyed by stage name: "detection",
+    "mitigation", "judge".
+    """
+    event: TrafficEvent
+    detection: Optional[DetectionResult] = None
+    mitigation: Optional[MitigationRecommendation] = None
+    response: Optional[ResponseRecommendation] = None
+    errors: Dict[str, str] = field(default_factory=dict)
+    timings_ms: Dict[str, float] = field(default_factory=dict)
+
+    @property
+    def succeeded(self) -> bool:
+        return self.response is not None
