@@ -1,2 +1,9 @@
 kagglehub   # train.py: downloads CICIDS2017 from Kaggle
 joblib      # classifier.py/train.py: save/load the trained model artifact (also a scikit-learn dep, declared explicitly since we import it directly)
+
+# Optional LLM layer (subagent.py use_llm=True) — smolagents, python-dotenv and
+# scikit-learn/pandas/numpy already come from the root requirements.txt.
+mcp>=1.10.1,<2  # MCP server (mcp_server.py) uses the FastMCP API, renamed/reworked in mcp 2.x
+smolagents[mcp] # MCPClient/ToolCollection support needs the "mcp" extra
+litellm         # smolagents.LiteLLMModel — one interface for Ollama, Gemini, etc.
+pydantic        # (also a smolagents/mcp dep) declared explicitly, pins the schema-validation lib

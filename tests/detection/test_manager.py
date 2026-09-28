@@ -35,3 +35,19 @@ def test_run_logs_a_delegation_step(mock_subagent_cls):
 
     trace = manager.get_trace()
     assert any(step.action == "delegate_to_subagent" for step in trace)
+
+
+@patch("src.detection.manager.DetectionSubagent")
+def test_close_delegates_to_subagent_close(mock_subagent_cls):
+    manager = DetectionManager()
+    manager.close()
+
+    mock_subagent_cls.return_value.close.assert_called_once()
+
+
+@patch("src.detection.manager.DetectionSubagent")
+def test_context_manager_closes_subagent_on_exit(mock_subagent_cls):
+    with DetectionManager() as manager:
+        manager.run(make_event())
+
+    mock_subagent_cls.return_value.close.assert_called_once()
