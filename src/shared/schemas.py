@@ -9,7 +9,7 @@ Only this file and base.py are fixed across the team. Everything else about
 how an agent works internally is up to its owner.
 """
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -84,6 +84,8 @@ class ResponseRecommendation:
     case: Optional[str] = None           # which decision case applied (for evaluation)
     reasoning: Optional[str] = None
     trace: List[TraceStep] = field(default_factory=list)
+    decided_by: Optional[str] = None     # "rules", "llm", "guardrail_override" or "rules_fallback"
+    llm_usage: Dict[str, Any] = field(default_factory=dict)  # LLM calls, tokens, latency, iterations (evaluation)
 
 
 @dataclass
