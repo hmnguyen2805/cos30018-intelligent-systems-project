@@ -24,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.response.agent import MODES, JudgeAgent  # noqa: E402
-from src.response.llm import LLMConfig  # noqa: E402
+from src.response.llm import TOOL_ACTIONS, LLMConfig  # noqa: E402
 from src.shared.schemas import (  # noqa: E402
     CorrelationResult,
     DetectionResult,
@@ -42,6 +42,46 @@ def _detection(anomalous, confidence, notes):
 def _mitigation(detection, techniques, confidence, action):
     correlation = CorrelationResult(detection=detection, matched_technique_ids=list(techniques), confidence=confidence)
     return MitigationRecommendation(correlation=correlation, proposed_action=action, confidence=confidence)
+
+
+# The correct outcome for each case: an action, or "escalate".
+EXPECTED = {
+    "agreed_brute_force": "block_source_ip",
+    "category_mismatch": "escalate",
+    "low_mitigation_confidence": "escalate",
+    "mitigation_failed": "escalate",
+    "benign": "no_action",
+}
+
+
+def is_correct(name, result):
+    expected = EXPECTED[name]
+    if expected == "escalate":
+        return result.escalated_to_human
+    return not result.escalated_to_human and result.recommended_action == expected
+
+
+def print_summary(rows):
+    """Per-mode metrics in the terms of the assignment spec (section 6)."""
+    print("Summary per mode (spec section 6 metrics)")
+    header = (f"{'mode':<12}{'correct':>9}{'avg iter':>10}{'avg calls':>11}{'avg tokens':>12}"
+              f"{'avg LLM s':>11}{'tool ok':>10}{'fallbacks':>11}{'invalid->recovered':>20}{'guardrail':>11}")
+    print(header)
+    for mode in dict.fromkeys(r["mode"] for r in rows):
+        rs = [r for r in rows if r["mode"] == mode]
+        n = len(rs)
+        usage = [r["llm_usage"] for r in rs]
+        # Tool-use success only means something when the LLM chooses the tools (agent mode).
+        tool_steps = [] if mode != "agent" else [s for r in rs for s in r["trace"] if s["action"] in TOOL_ACTIONS]
+        tool_ok = [s for s in tool_steps if '"error"' not in (s["observation"] or "")]
+        avg = lambda key: sum(u.get(key, 0) for u in usage) / n
+        tokens = sum(u.get("prompt_tokens", 0) + u.get("completion_tokens", 0) for u in usage) / n
+        tool_rate = f"{len(tool_ok)}/{len(tool_steps)}" if tool_steps else "-"
+        print(f"{mode:<12}{sum(r['correct'] for r in rs):>6}/{n:<2}{avg('iterations'):>10.1f}"
+              f"{avg('llm_calls'):>11.1f}{tokens:>12.0f}{avg('llm_latency_ms') / 1000:>11.1f}{tool_rate:>10}"
+              f"{sum(r['decided_by'] == 'rules_fallback' for r in rs):>11}"
+              f"{sum(u.get('invalid_replies', 0) for u in usage):>13}->{sum(u.get('recovered_replies', 0) for u in usage):<5}"
+              f"{sum(r['decided_by'] == 'guardrail_override' for r in rs):>11}")
 
 
 def build_cases():
@@ -94,7 +134,9 @@ def main():
         for mode in modes:
             result = JudgeAgent(mode=mode, config=config).run(judge_input)
             usage = result.llm_usage
+            correct = is_correct(name, result)
             print(f"[{name}] mode={mode:<11} -> {result.recommended_action:<18} "
+                  f"{'CORRECT' if correct else 'WRONG (expected ' + EXPECTED[name] + ')'} "
                   f"escalated={result.escalated_to_human!s:<5} decided_by={result.decided_by:<18} "
                   f"iterations={usage.get('iterations', 0)} calls={usage.get('llm_calls', 0)} "
                   f"tokens={usage.get('prompt_tokens', 0) + usage.get('completion_tokens', 0)} "
@@ -105,11 +147,14 @@ def main():
             if args.trace:
                 for s in result.trace:
                     print(f"      {s.step_number}. {s.action}: {s.thought or ''} | {s.observation or ''}")
-            saved.append({"case": name, "mode": mode, "recommended_action": result.recommended_action,
+            saved.append({"case": name, "mode": mode, "expected": EXPECTED[name], "correct": correct,
+                          "recommended_action": result.recommended_action,
                           "escalated": result.escalated_to_human, "decided_by": result.decided_by,
                           "rule_case": result.case, "reasoning": result.reasoning, "llm_usage": usage,
                           "trace": [asdict(s) for s in result.trace]})
         print()
+
+    print_summary(saved)
 
     if args.save:
         with open(args.save, "w", encoding="utf-8") as f:
