@@ -10,6 +10,7 @@ Needs Ollama running with the model pulled, for the default model:
 Usage (from the repo root):
     python scripts/judge_llm_demo.py                     # all modes, all cases
     python scripts/judge_llm_demo.py --mode agent --trace
+    python scripts/judge_llm_demo.py --mode agent --case category_mismatch --trace   # one case only
     python scripts/judge_llm_demo.py --model gemini/gemini-2.0-flash   # needs JUDGE_LLM_API_KEY
     python scripts/judge_llm_demo.py --save judge_demo.json
 """
@@ -66,6 +67,8 @@ def build_cases():
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--mode", choices=list(MODES) + ["all"], default="all")
+    parser.add_argument("--case", choices=list(build_cases()) + ["all"], default="all",
+                        help="run one example case only (default: all)")
     parser.add_argument("--model", help="litellm model id (default: JUDGE_LLM_MODEL or ollama_chat/qwen2.5:3b)")
     parser.add_argument("--trace", action="store_true", help="print every trace step")
     parser.add_argument("--save", help="write all results as JSON to this path")
@@ -84,7 +87,10 @@ def main():
 
     print(f"Model: {config.model}  (timeout {config.timeout_seconds:.0f}s, max steps {config.max_steps})\n")
     saved = []
-    for name, judge_input in build_cases().items():
+    cases = build_cases()
+    if args.case != "all":
+        cases = {args.case: cases[args.case]}
+    for name, judge_input in cases.items():
         for mode in modes:
             result = JudgeAgent(mode=mode, config=config).run(judge_input)
             usage = result.llm_usage
