@@ -5,6 +5,7 @@ scikit-learn
 pandas
 numpy
 python-dotenv
+litellm         # Judge LLM calls (Ollama locally, or a hosted model such as Gemini)
 
 # Local model runtime — install Ollama separately (not a pip package):
 # https://ollama.com/download

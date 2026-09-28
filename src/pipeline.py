@@ -76,8 +76,11 @@ def build_default_pipeline() -> Pipeline:
 
     Mitigation Manager is None until Callum's implementation lands; the Judge
     handles that as incomplete input.
+
+    The Judge's mode comes from JUDGE_MODE (rules | single_shot | agent;
+    default rules), see src/response/agent.py.
     """
     from src.detection.manager import DetectionManager
-    from src.response.agent import JudgeAgent
+    from src.response.agent import judge_from_env
 
-    return Pipeline(detection_manager=DetectionManager(), judge=JudgeAgent(), mitigation_manager=None)
+    return Pipeline(detection_manager=DetectionManager(), judge=judge_from_env(), mitigation_manager=None)

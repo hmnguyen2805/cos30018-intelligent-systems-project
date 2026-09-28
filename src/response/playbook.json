@@ -1,0 +1,59 @@
+{
+  "_comment": "Judge knowledge base. 'techniques': response guidance per MITRE ATT&CK technique (the 6 seed techniques plus T1498, T1499, T1046 to cover Detection's DoS, DDoS and PortScan categories). 'category_techniques': which techniques are consistent with each Detection attack category (Detection tags detector_notes with [category=...]).",
+  "techniques": {
+    "T1110": {
+      "name": "Brute Force",
+      "tactic": "Credential Access",
+      "guidance": "Repeated authentication attempts against a service. Blocking the source and locking targeted accounts is appropriate when the source is external. Escalate if the source is internal or if any login succeeded."
+    },
+    "T1110.001": {
+      "name": "Brute Force: Password Guessing",
+      "tactic": "Credential Access",
+      "guidance": "Automated guessing of account passwords (e.g. SSH-Patator, FTP-Patator). Lock the targeted accounts and block the source. Escalate if a login succeeded."
+    },
+    "T1566": {
+      "name": "Phishing",
+      "tactic": "Initial Access",
+      "guidance": "Malicious messages or attachments. Rarely visible in network flow data alone; a flow-based match to phishing is weak evidence and usually warrants human review."
+    },
+    "T1190": {
+      "name": "Exploit Public-Facing Application",
+      "tactic": "Initial Access",
+      "guidance": "Attacks against internet-facing services (e.g. web attacks, SQL injection, XSS). Blocking the source and isolating or patching the targeted service is appropriate. Escalate if the service holds sensitive data."
+    },
+    "T1041": {
+      "name": "Exfiltration Over C2 Channel",
+      "tactic": "Exfiltration",
+      "guidance": "Data leaving through an existing command-and-control channel (e.g. botnet traffic). Isolating the internal host is appropriate; the host is likely compromised, so escalation for forensics is usually warranted."
+    },
+    "T1567": {
+      "name": "Exfiltration Over Web Service",
+      "tactic": "Exfiltration",
+      "guidance": "Data sent to a legitimate external web service. Blocking the destination is appropriate, but false positives are common with normal cloud usage; escalate when confidence is not high."
+    },
+    "T1498": {
+      "name": "Network Denial of Service",
+      "tactic": "Impact",
+      "guidance": "Volumetric flooding of a network or service (e.g. DDoS). Rate-limiting or blocking the sources upstream is appropriate. Many sources at once suggest DDoS rather than a single attacker."
+    },
+    "T1499": {
+      "name": "Endpoint Denial of Service",
+      "tactic": "Impact",
+      "guidance": "Exhausting a specific service's resources (e.g. DoS Hulk, GoldenEye, Slowloris, SlowHTTPTest). Blocking or rate-limiting the source is appropriate."
+    },
+    "T1046": {
+      "name": "Network Service Discovery",
+      "tactic": "Discovery",
+      "guidance": "Scanning for open ports and services (e.g. PortScan). Usually reconnaissance before an attack: blocking the scanning source is low-risk and appropriate."
+    }
+  },
+  "category_techniques": {
+    "BruteForce": ["T1110", "T1110.001"],
+    "WebAttack": ["T1190"],
+    "DoS": ["T1499", "T1498"],
+    "DDoS": ["T1498", "T1499"],
+    "PortScan": ["T1046"],
+    "Botnet": ["T1041"],
+    "Infiltration": ["T1566", "T1190", "T1041", "T1567"]
+  }
+}
