@@ -1,0 +1,4 @@
+# Mitigation Manager / Correlation Subagent extras (on top of the root requirements.txt).
+# Only needed for the embedding fallback (Detection category "Unknown" or missing).
+# Category lookups, the tests and CI work without it.
+sentence-transformers   # subagent.py: all-MiniLM-L6-v2 embeddings (pulls in torch; model downloads on first use)
