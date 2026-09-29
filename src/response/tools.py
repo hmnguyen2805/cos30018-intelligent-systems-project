@@ -12,7 +12,6 @@ they only read the JudgeInput and the local playbook.json. That is the
 sandboxing boundary for the Judge's tool use (assignment criteria 5E).
 """
 import json
-import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -20,25 +19,15 @@ from typing import Callable, Dict, List, Optional
 
 from src.response import rules
 from src.shared.schemas import JudgeInput
+from src.shared.tags import parse_category
 
 PLAYBOOK_PATH = Path(__file__).with_name("playbook.json")
-
-# Detection tags its notes like "[category=BruteForce] ..." (Vinh's category model).
-_CATEGORY_TAG = re.compile(r"\[category=([A-Za-z]+)\]")
 
 
 @lru_cache(maxsize=1)
 def load_playbook() -> dict:
     with open(PLAYBOOK_PATH, encoding="utf-8") as f:
         return json.load(f)
-
-
-def parse_category(detector_notes: Optional[str]) -> Optional[str]:
-    """Return the attack category Detection tagged in its notes, or None."""
-    if not detector_notes:
-        return None
-    match = _CATEGORY_TAG.search(detector_notes)
-    return match.group(1) if match else None
 
 
 @dataclass

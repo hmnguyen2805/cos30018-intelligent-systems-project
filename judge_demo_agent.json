@@ -1,0 +1,306 @@
+[
+  {
+    "case": "agreed_brute_force",
+    "mode": "agent",
+    "recommended_action": "block_source_ip",
+    "escalated": false,
+    "decided_by": "llm",
+    "rule_case": "AGREED_THREAT",
+    "reasoning": "The detection is anomalous, both managers are confident, the evidence is consistent, and the proposed action aligns with the playbook guidance.",
+    "llm_usage": {
+      "mode": "agent",
+      "model": "ollama_chat/qwen2.5:3b",
+      "llm_calls": 4,
+      "iterations": 4,
+      "prompt_tokens": 2986,
+      "completion_tokens": 226,
+      "llm_latency_ms": 80138.80810001865,
+      "invalid_replies": 0,
+      "recovered_replies": 0
+    },
+    "trace": [
+      {
+        "step_number": 1,
+        "thought": "Comparing conclusions to decide if the response can be automated or requires human review.",
+        "action": "compare_conclusions",
+        "tool_input": null,
+        "observation": "{\"detection_verdict\": \"anomalous\", \"detection_anomalous\": true, \"detection_confidence\": 0.93, \"detection_confident\": true, \"confidence_threshold\": 0.6, \"detection_notes\": \"[category=BruteForce] Many short SSH connections from one source.\", \"mitigation_available\": true, \"mitigation_error\": null, \"matched_techniques\": [\"T1110\"], \"mitigation_confidence\": 0.82, \"mitigation_confident\": true, \"proposed_action\": \"block_source_ip\", \"managers_agree\": true, \"allowed_final_actions\": [\"block_source_ip\", \"no..."
+      },
+      {
+        "step_number": 2,
+        "thought": "Both managers agree and the proposed action is to block the source IP. The detection is anomalous and the confidence is above the threshold. The matched technique is T1110, which is a brute force type",
+        "action": "lookup_playbook",
+        "tool_input": {
+          "technique_id": "T1110"
+        },
+        "observation": "{\"technique_id\": \"T1110\", \"found\": true, \"name\": \"Brute Force\", \"tactic\": \"Credential Access\", \"guidance\": \"Repeated authentication attempts against a service. Blocking the source and locking targeted accounts is appropriate when the source is external. Escalate if the source is internal or if any login succeeded.\"}"
+      },
+      {
+        "step_number": 3,
+        "thought": "The playbook confirms the technique is a brute force attack and provides guidance on appropriate responses. The source is external, so blocking the source IP is consistent with the playbook.",
+        "action": "check_category_consistency",
+        "tool_input": null,
+        "observation": "{\"category\": \"BruteForce\", \"matched_techniques\": [\"T1110\"], \"techniques_expected_for_category\": [\"T1110\", \"T1110.001\"], \"consistent\": true}"
+      },
+      {
+        "step_number": 4,
+        "thought": "The category 'BruteForce' matches the technique T1110, which is expected for this category. The evidence is consistent.",
+        "action": "llm_finalize",
+        "tool_input": {
+          "final_action": "block_source_ip"
+        },
+        "observation": "The detection is anomalous, both managers are confident, the evidence is consistent, and the proposed action aligns with the playbook guidance."
+      },
+      {
+        "step_number": 5,
+        "thought": "Finalize the response.",
+        "action": "finalize",
+        "tool_input": null,
+        "observation": "recommended_action=block_source_ip"
+      }
+    ]
+  },
+  {
+    "case": "category_mismatch",
+    "mode": "agent",
+    "recommended_action": "escalate_to_human",
+    "escalated": true,
+    "decided_by": "llm",
+    "rule_case": "AGREED_THREAT",
+    "reasoning": "The category 'DoS' does not match the technique 'T1110'.",
+    "llm_usage": {
+      "mode": "agent",
+      "model": "ollama_chat/qwen2.5:3b",
+      "llm_calls": 4,
+      "iterations": 4,
+      "prompt_tokens": 2961,
+      "completion_tokens": 201,
+      "llm_latency_ms": 44374.64540009387,
+      "invalid_replies": 0,
+      "recovered_replies": 0
+    },
+    "trace": [
+      {
+        "step_number": 1,
+        "thought": "Comparing conclusions to decide if the response can be automated or requires human review.",
+        "action": "compare_conclusions",
+        "tool_input": null,
+        "observation": "{\"detection_verdict\": \"anomalous\", \"detection_anomalous\": true, \"detection_confidence\": 0.91, \"detection_confident\": true, \"confidence_threshold\": 0.6, \"detection_notes\": \"[category=DoS] High packet rate to one web server.\", \"mitigation_available\": true, \"mitigation_error\": null, \"matched_techniques\": [\"T1110\"], \"mitigation_confidence\": 0.78, \"mitigation_confident\": true, \"proposed_action\": \"block_source_ip\", \"managers_agree\": true, \"allowed_final_actions\": [\"block_source_ip\", \"no_action\"]}"
+      },
+      {
+        "step_number": 2,
+        "thought": "Both managers agree and the proposed action is to block the source IP. The detection is anomalous and confirmed, and the confidence levels are above the threshold. The technique matched is consistent.",
+        "action": "lookup_playbook",
+        "tool_input": {
+          "technique_id": "T1110"
+        },
+        "observation": "{\"technique_id\": \"T1110\", \"found\": true, \"name\": \"Brute Force\", \"tactic\": \"Credential Access\", \"guidance\": \"Repeated authentication attempts against a service. Blocking the source and locking targeted accounts is appropriate when the source is external. Escalate if the source is internal or if any login succeeded.\"}"
+      },
+      {
+        "step_number": 3,
+        "thought": "The playbook confirms the technique matches the anomaly. Guidance suggests blocking the source IP for brute force attacks. The source is external, so blocking is appropriate.",
+        "action": "check_category_consistency",
+        "tool_input": null,
+        "observation": "{\"category\": \"DoS\", \"matched_techniques\": [\"T1110\"], \"techniques_expected_for_category\": [\"T1499\", \"T1498\"], \"consistent\": false}"
+      },
+      {
+        "step_number": 4,
+        "thought": "The category 'DoS' does not match the technique 'T1110'. The response action must be reviewed by a human analyst.",
+        "action": "llm_escalate",
+        "tool_input": null,
+        "observation": "The category 'DoS' does not match the technique 'T1110'."
+      },
+      {
+        "step_number": 5,
+        "thought": "Escalate to a human analyst.",
+        "action": "escalate_to_human",
+        "tool_input": null,
+        "observation": "recommended_action=escalate_to_human"
+      }
+    ]
+  },
+  {
+    "case": "low_mitigation_confidence",
+    "mode": "agent",
+    "recommended_action": "escalate_to_human",
+    "escalated": true,
+    "decided_by": "guardrail_override",
+    "rule_case": "LOW_MITIGATION_CONFIDENCE",
+    "reasoning": "Guardrail: the LLM wanted to finalize with 'isolate_service' (The threat is confirmed, both managers are confident, and the evidence is consistent.), but the rules require escalation. Mitigation confidence 0.41 is below 0.6; the proposed action is not trusted automatically.",
+    "llm_usage": {
+      "mode": "agent",
+      "model": "ollama_chat/qwen2.5:3b",
+      "llm_calls": 4,
+      "iterations": 4,
+      "prompt_tokens": 2991,
+      "completion_tokens": 232,
+      "llm_latency_ms": 48419.58969994448,
+      "invalid_replies": 0,
+      "recovered_replies": 0
+    },
+    "trace": [
+      {
+        "step_number": 1,
+        "thought": "Comparing conclusions to decide if the response can be automated or requires human review.",
+        "action": "compare_conclusions",
+        "tool_input": null,
+        "observation": "{\"detection_verdict\": \"anomalous\", \"detection_anomalous\": true, \"detection_confidence\": 0.88, \"detection_confident\": true, \"confidence_threshold\": 0.6, \"detection_notes\": \"[category=WebAttack] Unusual request payload sizes.\", \"mitigation_available\": true, \"mitigation_error\": null, \"matched_techniques\": [\"T1190\"], \"mitigation_confidence\": 0.41, \"mitigation_confident\": false, \"proposed_action\": \"isolate_service\", \"managers_agree\": true, \"allowed_final_actions\": [\"isolate_service\", \"no_action\"]}"
+      },
+      {
+        "step_number": 2,
+        "thought": "The detection is considered anomalous with a high confidence level, and the proposed action is to isolate the service. Both managers are confident and agree, and the evidence is consistent.",
+        "action": "lookup_playbook",
+        "tool_input": {
+          "technique_id": "T1190"
+        },
+        "observation": "{\"technique_id\": \"T1190\", \"found\": true, \"name\": \"Exploit Public-Facing Application\", \"tactic\": \"Initial Access\", \"guidance\": \"Attacks against internet-facing services (e.g. web attacks, SQL injection, XSS). Blocking the source and isolating or patching the targeted service is appropriate. Escalate if the service holds sensitive data.\"}"
+      },
+      {
+        "step_number": 3,
+        "thought": "The technique T1190 matches the anomaly, and the playbook recommends isolating the service for attacks against internet-facing applications. The service is also noted to hold sensitive data.",
+        "action": "check_category_consistency",
+        "tool_input": null,
+        "observation": "{\"category\": \"WebAttack\", \"matched_techniques\": [\"T1190\"], \"techniques_expected_for_category\": [\"T1190\"], \"consistent\": true}"
+      },
+      {
+        "step_number": 4,
+        "thought": "The category [category=WebAttack] from the detection matches the expected technique for this anomaly (T1190). The evidence is consistent.",
+        "action": "llm_finalize",
+        "tool_input": {
+          "final_action": "isolate_service"
+        },
+        "observation": "The threat is confirmed, both managers are confident, and the evidence is consistent."
+      },
+      {
+        "step_number": 5,
+        "thought": "Guardrail: the LLM wanted to finalize with 'isolate_service' (The threat is confirmed, both managers are confident, and the evidence is consistent.), but the rules require escalation. Mitigation confidence 0.41 is below 0.6; the proposed action is not trusted automatically.",
+        "action": "guardrail_override",
+        "tool_input": {
+          "case": "LOW_MITIGATION_CONFIDENCE"
+        },
+        "observation": "action=escalate_to_human, escalate=True"
+      },
+      {
+        "step_number": 6,
+        "thought": "Escalate to a human analyst.",
+        "action": "escalate_to_human",
+        "tool_input": null,
+        "observation": "recommended_action=escalate_to_human"
+      }
+    ]
+  },
+  {
+    "case": "mitigation_failed",
+    "mode": "agent",
+    "recommended_action": "escalate_to_human",
+    "escalated": true,
+    "decided_by": "llm",
+    "rule_case": "MITIGATION_MISSING",
+    "reasoning": "The category 'PortScan' does not align with any of the matched techniques, indicating inconsistency.",
+    "llm_usage": {
+      "mode": "agent",
+      "model": "ollama_chat/qwen2.5:3b",
+      "llm_calls": 4,
+      "iterations": 4,
+      "prompt_tokens": 2732,
+      "completion_tokens": 128,
+      "llm_latency_ms": 29414.227699977346,
+      "invalid_replies": 0,
+      "recovered_replies": 0
+    },
+    "trace": [
+      {
+        "step_number": 1,
+        "thought": "Comparing conclusions to decide if the response can be automated or requires human review.",
+        "action": "compare_conclusions",
+        "tool_input": null,
+        "observation": "{\"detection_verdict\": \"anomalous\", \"detection_anomalous\": true, \"detection_confidence\": 0.9, \"detection_confident\": true, \"confidence_threshold\": 0.6, \"detection_notes\": \"[category=PortScan] One source touching many ports.\", \"mitigation_available\": false, \"mitigation_error\": \"RuntimeError: vector DB unreachable\", \"matched_techniques\": [], \"mitigation_confidence\": null, \"mitigation_confident\": null, \"proposed_action\": null, \"managers_agree\": false, \"allowed_final_actions\": [\"no_action\"]}"
+      },
+      {
+        "step_number": 2,
+        "thought": "The detection is flagged as anomalous with high confidence but no techniques matched. The managers do not agree and the proposed action is not available.",
+        "action": "lookup_playbook",
+        "tool_input": null,
+        "observation": "{\"error\": \"No technique was matched, so there is no playbook entry to look up.\"}"
+      },
+      {
+        "step_number": 3,
+        "thought": "Since no techniques were matched, there is no playbook to consult.",
+        "action": "check_category_consistency",
+        "tool_input": null,
+        "observation": "{\"category\": \"PortScan\", \"matched_techniques\": [], \"consistent\": \"unknown\", \"note\": \"Mitigation matched no technique.\"}"
+      },
+      {
+        "step_number": 4,
+        "thought": "The category 'PortScan' does not align with any of the matched techniques, indicating inconsistency.",
+        "action": "llm_escalate",
+        "tool_input": null,
+        "observation": "The category 'PortScan' does not align with any of the matched techniques, indicating inconsistency."
+      },
+      {
+        "step_number": 5,
+        "thought": "Escalate to a human analyst.",
+        "action": "escalate_to_human",
+        "tool_input": null,
+        "observation": "recommended_action=escalate_to_human"
+      }
+    ]
+  },
+  {
+    "case": "benign",
+    "mode": "agent",
+    "recommended_action": "escalate_to_human",
+    "escalated": true,
+    "decided_by": "llm",
+    "rule_case": "BOTH_BENIGN",
+    "reasoning": "Mitigation Manager's confidence is low and no technique matched, so the response must be reviewed by a human analyst.",
+    "llm_usage": {
+      "mode": "agent",
+      "model": "ollama_chat/qwen2.5:3b",
+      "llm_calls": 4,
+      "iterations": 4,
+      "prompt_tokens": 2814,
+      "completion_tokens": 191,
+      "llm_latency_ms": 40844.27249990404,
+      "invalid_replies": 0,
+      "recovered_replies": 0
+    },
+    "trace": [
+      {
+        "step_number": 1,
+        "thought": "Comparing conclusions to decide if the response can be automated or requires human review.",
+        "action": "compare_conclusions",
+        "tool_input": null,
+        "observation": "{\"detection_verdict\": \"benign\", \"detection_anomalous\": false, \"detection_confidence\": 0.97, \"detection_confident\": true, \"confidence_threshold\": 0.6, \"detection_notes\": null, \"mitigation_available\": true, \"mitigation_error\": null, \"matched_techniques\": [], \"mitigation_confidence\": 0.2, \"mitigation_confident\": null, \"proposed_action\": null, \"managers_agree\": true, \"allowed_final_actions\": [\"no_action\"], \"mitigation_note\": \"No technique matched, so Mitigation has nothing to act on; its confidence ..."
+      },
+      {
+        "step_number": 2,
+        "thought": "The detection verdict is benign and the Detection Manager is confident, but there are no matched techniques and the Mitigation Manager's confidence is low. This case requires further analysis.",
+        "action": "lookup_playbook",
+        "tool_input": null,
+        "observation": "{\"error\": \"No technique was matched, so there is no playbook entry to look up.\"}"
+      },
+      {
+        "step_number": 3,
+        "thought": "Since no technique was matched, we cannot look up a playbook entry. We need to check the category consistency and decide based on that.",
+        "action": "check_category_consistency",
+        "tool_input": null,
+        "observation": "{\"category\": null, \"matched_techniques\": [], \"consistent\": \"not_applicable\", \"note\": \"Detection says the traffic is benign, so there is no attack category to check. This is expected for benign traffic.\"}"
+      },
+      {
+        "step_number": 4,
+        "thought": "The traffic is benign and there is no attack category to check. The Mitigation Manager's confidence is low, so the response must be reviewed by a human analyst.",
+        "action": "llm_escalate",
+        "tool_input": null,
+        "observation": "Mitigation Manager's confidence is low and no technique matched, so the response must be reviewed by a human analyst."
+      },
+      {
+        "step_number": 5,
+        "thought": "Escalate to a human analyst.",
+        "action": "escalate_to_human",
+        "tool_input": null,
+        "observation": "recommended_action=escalate_to_human"
+      }
+    ]
+  }
+]

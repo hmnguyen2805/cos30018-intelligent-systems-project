@@ -74,13 +74,16 @@ def build_default_pipeline() -> Pipeline:
     """The real system as it currently exists. Imports are local so importing
     this module doesn't require a trained detection model.
 
-    Mitigation Manager is None until Callum's implementation lands; the Judge
-    handles that as incomplete input.
+    The Mitigation Manager loads its embedding model lazily, only for events
+    Detection couldn't categorise, so building the pipeline stays cheap.
 
     The Judge's mode comes from JUDGE_MODE (rules | single_shot | agent;
     default rules), see src/response/agent.py.
     """
+    from src.correlation.manager import MitigationManager
     from src.detection.manager import DetectionManager
     from src.response.agent import judge_from_env
 
-    return Pipeline(detection_manager=DetectionManager(), judge=judge_from_env(), mitigation_manager=None)
+    return Pipeline(
+        detection_manager=DetectionManager(), judge=judge_from_env(), mitigation_manager=MitigationManager()
+    )
