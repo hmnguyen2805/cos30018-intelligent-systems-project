@@ -20,7 +20,7 @@ import json
 import os
 import time
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Sequence
 
 DEFAULT_MODEL = "ollama_chat/qwen2.5:3b"
 
@@ -96,19 +96,31 @@ class LiteLLMClient:
 TOOL_ACTIONS = ("compare_conclusions", "lookup_playbook", "check_category_consistency")
 FINALIZE = "finalize"
 ESCALATE = "escalate"
+REQUEST_RECHECK = "request_recheck"
 AGENT_ACTIONS = TOOL_ACTIONS + (FINALIZE, ESCALATE)
+RECHECK_MANAGERS = ("detection", "mitigation")
+MAX_RECHECK_REASON_CHARS = 200
 
-AGENT_STEP_SCHEMA = {
-    "type": "object",
-    "properties": {
+
+def agent_step_schema(allow_recheck: bool = False) -> dict:
+    """The JSON shape of one agent turn. request_recheck (with "manager" and
+    "reason") is only offered when a recheck is still available, so the model
+    can't pick an action it isn't allowed to take."""
+    actions = list(AGENT_ACTIONS) + ([REQUEST_RECHECK] if allow_recheck else [])
+    properties = {
         "thought": {"type": "string", "maxLength": 200},
-        "action": {"type": "string", "enum": list(AGENT_ACTIONS)},
+        "action": {"type": "string", "enum": actions},
         "technique_id": {"type": "string"},
         "final_action": {"type": "string"},
         "reasoning": {"type": "string", "maxLength": 300},
-    },
-    "required": ["thought", "action"],
-}
+    }
+    if allow_recheck:
+        properties["manager"] = {"type": "string", "enum": list(RECHECK_MANAGERS)}
+        properties["reason"] = {"type": "string", "maxLength": MAX_RECHECK_REASON_CHARS}
+    return {"type": "object", "properties": properties, "required": ["thought", "action"]}
+
+
+AGENT_STEP_SCHEMA = agent_step_schema(allow_recheck=False)
 
 SINGLE_SHOT_SCHEMA = {
     "type": "object",
@@ -148,6 +160,19 @@ Actions:
 After each tool action you get its result as an observation; then choose your next action.
 Keep "reasoning" under 300 characters and only cite facts you observed."""
 
+_RECHECK_PROMPT = """
+
+You may also send the case back to ONE manager to look again, once per manager:
+- request_recheck: add "manager" ("detection" or "mitigation", one listed in rechecks_available) and a short "reason".
+  Use it when the evidence is inconsistent or a manager seems to have missed something, before you escalate.
+  A Detection recheck adds evidence (top-3 attack labels, more traffic features) but never changes its verdict or confidence.
+  After a recheck you get the managers' updated conclusions; check category consistency again before finalizing with an action."""
+
+
+def agent_system_prompt(allow_recheck: bool = False) -> str:
+    return AGENT_SYSTEM_PROMPT + (_RECHECK_PROMPT if allow_recheck else "")
+
+
 AGENT_TASK_MESSAGE = "A new case is ready for judgement. Start by calling compare_conclusions."
 
 SINGLE_SHOT_SYSTEM_PROMPT = _ROLE + """
@@ -160,9 +185,10 @@ def observation_message(action: str, result: dict) -> Dict[str, str]:
     return {"role": "user", "content": f"Observation ({action}): {json.dumps(result, default=str)}"}
 
 
-def invalid_reply_message(reason: str) -> Dict[str, str]:
+def invalid_reply_message(reason: str, allow_recheck: bool = False) -> Dict[str, str]:
+    actions = list(AGENT_ACTIONS) + ([REQUEST_RECHECK] if allow_recheck else [])
     return {"role": "user", "content": f"Your last reply was not valid: {reason}. "
-                                       f"Reply with one JSON object using one of these actions: {', '.join(AGENT_ACTIONS)}."}
+                                       f"Reply with one JSON object using one of these actions: {', '.join(actions)}."}
 
 
 def single_shot_user_message(evidence: dict) -> Dict[str, str]:
@@ -188,6 +214,8 @@ class AgentStep:
     technique_id: Optional[str] = None
     final_action: Optional[str] = None
     reasoning: Optional[str] = None
+    manager: Optional[str] = None        # request_recheck only
+    recheck_reason: Optional[str] = None  # request_recheck only
 
 
 def _load_json_object(raw: str) -> dict:
@@ -204,9 +232,14 @@ def _load_json_object(raw: str) -> dict:
     return data
 
 
-def parse_agent_step(raw: str, allowed_final_actions: List[str]) -> AgentStep:
+def parse_agent_step(raw: str, allowed_final_actions: List[str],
+                     recheck_managers: Sequence[str] = ()) -> AgentStep:
+    """Parse one agent turn. `recheck_managers` lists the managers the Judge may
+    still send the case back to; empty means request_recheck isn't allowed."""
     data = _load_json_object(raw)
     action = data.get("action")
+    if action == REQUEST_RECHECK:
+        return _parse_recheck(data, recheck_managers)
     if action not in AGENT_ACTIONS:
         raise LLMOutputError("unknown_action", repr(action))
     thought = str(data.get("thought") or "")
@@ -222,6 +255,20 @@ def parse_agent_step(raw: str, allowed_final_actions: List[str]) -> AgentStep:
         final_action=final_action if action == FINALIZE else None,
         reasoning=reasoning if action in (FINALIZE, ESCALATE) else None,
     )
+
+
+def _parse_recheck(data: dict, recheck_managers: Sequence[str]) -> AgentStep:
+    if not recheck_managers:
+        raise LLMOutputError("recheck_unavailable", "no recheck is available for this case")
+    manager = data.get("manager")
+    if manager not in recheck_managers:
+        raise LLMOutputError("recheck_unavailable",
+                             f"manager {manager!r} can't be rechecked; available: {list(recheck_managers)}")
+    reason = " ".join(str(data.get("reason") or "").split())[:MAX_RECHECK_REASON_CHARS]
+    if not reason:
+        raise LLMOutputError("missing_reason", "request_recheck needs a short reason")
+    return AgentStep(thought=str(data.get("thought") or ""), action=REQUEST_RECHECK,
+                     manager=manager, recheck_reason=reason)
 
 
 def parse_single_shot(raw: str, allowed_final_actions: List[str]) -> AgentStep:

@@ -10,6 +10,11 @@ evidence about a case before deciding.
 None of them executes generated code or changes anything outside the Judge:
 they only read the JudgeInput and the local playbook.json. That is the
 sandboxing boundary for the Judge's tool use (assignment criteria 5E).
+
+The agent-mode Judge has one more action, request_recheck(manager, reason),
+handled in agent.py rather than here: it doesn't read evidence, it asks the
+pipeline to re-run a manager (through JudgeInput.recheck), at most once per
+manager per case.
 """
 import json
 from dataclasses import dataclass, field
@@ -18,8 +23,8 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from src.response import rules
-from src.shared.schemas import JudgeInput
-from src.shared.tags import parse_category
+from src.shared.schemas import DetectionResult, JudgeInput
+from src.shared.tags import parse_category, parse_label
 
 PLAYBOOK_PATH = Path(__file__).with_name("playbook.json")
 
@@ -30,14 +35,37 @@ def load_playbook() -> dict:
         return json.load(f)
 
 
+def detection_category(detection: DetectionResult) -> Optional[str]:
+    """Detection's coarse attack category: the structured field if Detection
+    filled it in, otherwise the [category=X] tag in its notes."""
+    return detection.attack_category or parse_category(detection.detector_notes)
+
+
+def detection_label(detection: DetectionResult) -> Optional[str]:
+    """Detection's fine CICIDS2017 label (e.g. "DoS Hulk"), or None."""
+    return detection.attack_label or parse_label(detection.detector_notes)
+
+
 @dataclass
 class JudgeContext:
-    """Everything the tools need about one case. Built once per Judge run."""
+    """Everything the tools need about one case. Built once per Judge run,
+    and rebuilt after a recheck (the managers' conclusions have changed).
+
+    `allow_rechecks` is True only for the agent-mode Judge; the rules and
+    single-shot baselines never send cases back."""
     judge_input: JudgeInput
+    allow_rechecks: bool = False
     comparison: rules.Comparison = field(init=False)
 
     def __post_init__(self):
         self.comparison = rules.compare_conclusions(self.judge_input)
+
+    @property
+    def rechecks_available(self) -> List[str]:
+        """Managers the Judge may still send this case back to."""
+        if not self.allow_rechecks or self.judge_input.recheck is None:
+            return []
+        return list(self.judge_input.rechecks_available)
 
     @property
     def allowed_final_actions(self) -> List[str]:
@@ -70,6 +98,8 @@ def compare_conclusions(ctx: JudgeContext) -> dict:
         "detection_confidence": round(c.detection_confidence, 3),
         "detection_confident": c.detection_confidence >= rules.DETECTION_MIN_CONFIDENCE,
         "confidence_threshold": rules.DETECTION_MIN_CONFIDENCE,
+        "detection_category": detection_category(detection),
+        "detection_label": detection_label(detection),
         "detection_notes": detection.detector_notes,
         "mitigation_available": c.mitigation_available,
         "mitigation_error": c.mitigation_error,
@@ -85,6 +115,8 @@ def compare_conclusions(ctx: JudgeContext) -> dict:
     }
     if nothing_matched:
         facts["mitigation_note"] = "No technique matched, so Mitigation has nothing to act on; its confidence is not relevant."
+    if ctx.allow_rechecks:
+        facts["rechecks_available"] = ctx.rechecks_available
     return facts
 
 
@@ -107,7 +139,7 @@ def lookup_playbook(ctx: JudgeContext, technique_id: Optional[str] = None) -> di
 
 
 def check_category_consistency(ctx: JudgeContext) -> dict:
-    category = parse_category(ctx.judge_input.detection.detector_notes)
+    category = detection_category(ctx.judge_input.detection)
     techniques = list(ctx.comparison.technique_ids)
     if not ctx.comparison.detection_anomalous:
         return {"category": category, "matched_techniques": techniques, "consistent": "not_applicable",

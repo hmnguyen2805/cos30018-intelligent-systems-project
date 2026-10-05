@@ -29,8 +29,19 @@ class MitigationManager(BaseAgent):
         super().__init__()
         self._subagent = subagent or CorrelationSubagent()
 
-    def run(self, input_data: DetectionResult) -> MitigationRecommendation:
+    def run(self, input_data: DetectionResult, recheck_reason: Optional[str] = None) -> MitigationRecommendation:
+        """recheck_reason is set when the Judge sends the case back ("look
+        again, because ..."). For now the reason is only recorded in the
+        trace and the analysis runs as normal; using it (e.g. a different
+        query or choosing among candidate techniques) is the next step for
+        the Mitigation Manager's own reasoning."""
         self._trace = []
+        if recheck_reason is not None:
+            self.log_step(
+                thought="Judge requested a recheck. Recorded; the analysis below runs as normal for now.",
+                action="recheck",
+                tool_input={"reason": recheck_reason},
+            )
         self.log_step(thought="Delegate to Correlation Subagent.", action="delegate_to_subagent")
 
         correlation = self._subagent.run(input_data)

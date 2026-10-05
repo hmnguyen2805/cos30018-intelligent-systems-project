@@ -33,7 +33,8 @@ src/response/
 └── README.md
 src/pipeline.py              # Detection -> Mitigation -> Judge, failure handling, timings
 scripts/judge_llm_demo.py    # run the Judge on example cases against a real model
-tests/fakes.py               # FakeMitigationManager until the real one lands
+src/ui/app.py                # Gradio UI (python -m src.ui.app)
+tests/fakes.py               # FakeMitigationManager for pipeline tests
 ```
 
 ## Modes
@@ -45,7 +46,7 @@ be compared directly (the assignment requires a simpler baseline):
 |---|---|---|
 | `rules` | decision table only, no LLM | baseline: fixed workflow |
 | `single_shot` | code gathers the evidence with the tools, then one LLM call decides | baseline: single LLM call |
-| `agent` | iterative loop: each turn the LLM picks the next action (a tool, `finalize` or `escalate`), code runs it and feeds the result back as an observation, until it decides or reaches the step limit | the system |
+| `agent` | iterative loop: each turn the LLM picks the next action (a tool, `request_recheck`, `finalize` or `escalate`), code runs it and feeds the result back as an observation, until it decides or reaches the step limit | the system |
 
 Why a JSON-per-turn loop instead of smolagents' `ToolCallingAgent`: on local
 Ollama models litellm drops `tool_choice`, so native tool calling is
@@ -57,6 +58,31 @@ What the LLM adds over the rules: it can read text the rules can't. Example:
 Detection tags `[category=DoS]` but Mitigation matched T1110 (brute force), both
 confidently. The rules see an agreed threat and would act; the agent calls
 `check_category_consistency`, sees the mismatch, and escalates.
+
+## Rechecks (two-way coordination)
+
+The agent can send a case back to a manager to look again:
+`{"action": "request_recheck", "manager": "detection" | "mitigation", "reason": "..."}`.
+
+- The pipeline puts a callback in `JudgeInput.recheck`. The Judge calls it with the
+  manager and reason; the pipeline re-runs that manager and returns the updated
+  conclusions, and the agent loop carries on with them.
+- `detection`: `DetectionManager.run(event, recheck_reason=...)` adds evidence (top-3
+  labels, more features, tree votes) but never changes the verdict or confidence.
+  The Mitigation Manager then runs again on the new result, since it builds on it.
+- `mitigation`: `MitigationManager.run(detection, recheck_reason=...)`. For now the
+  reason is only recorded in its trace; using it is part of Callum's LLM layer.
+- At most one recheck per manager per case, enforced in code (the Judge and the
+  pipeline both check). The action and its schema fields are only offered while a
+  recheck is still available.
+- After a recheck the old consistency check no longer counts: the agent must call
+  `check_category_consistency` again before finalizing with an action. The rule
+  decision (fallback and guardrail) is computed from the updated conclusions.
+- A manager crashing during a recheck is reported to the agent; the earlier
+  conclusions stand.
+- Only the agent rechecks. `rules` and `single_shot` stay fixed baselines.
+- Recorded in `ResponseRecommendation.rechecks` / `PipelineRun.rechecks` (manager,
+  reason, before/after summary, error, time) and `llm_usage["rechecks"]`.
 
 ## Guardrails and fallback
 
@@ -119,6 +145,6 @@ python scripts/judge_llm_demo.py --save judge_demo.json     # all modes, results
 
 - [x] Week 7: contract, rule-based decision table, pipeline with failure handling and timings, tests.
 - [x] Week 8: LLM Judge agent loop, single-shot baseline, tools, playbook, guardrails, fallback, tests, demo script.
-- [ ] Week 9: `request_recheck` feedback path to the managers (needs small API additions from Detection and Mitigation).
-- [ ] Week 10: swap `FakeMitigationManager` for the real Mitigation Manager in `build_default_pipeline()`.
+- [x] Week 9: `request_recheck` feedback path to the managers; reads Detection's fine label and the new `DetectionResult` fields; Heartbleed in the playbook; Gradio UI skeleton (`src/ui/`). The real Mitigation Manager is in `build_default_pipeline()` (PR #4).
+- [ ] Week 10: end-to-end runs on real CICIDS2017 rows; try the recheck with a real model; UI polish.
 - [ ] Week 11: evaluation of the three modes on at least 30 test cases.

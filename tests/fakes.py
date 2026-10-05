@@ -5,7 +5,7 @@ FakeMitigationManager stands in for Callum's Mitigation Manager until the
 real one exists, so the Judge and pipeline can be built and tested now.
 Swap in the real class once it lands; the contract is the same:
 
-    run(detection: DetectionResult) -> MitigationRecommendation
+    run(detection: DetectionResult, recheck_reason=None) -> MitigationRecommendation
 """
 from typing import Sequence
 
@@ -54,9 +54,11 @@ class FakeMitigationManager:
     def __init__(self, scenario: str = "match"):
         self.scenario = scenario
         self.calls = []
+        self.recheck_reasons = []  # one entry per call: None, or the Judge's reason
 
-    def run(self, detection: DetectionResult) -> MitigationRecommendation:
+    def run(self, detection: DetectionResult, recheck_reason=None) -> MitigationRecommendation:
         self.calls.append(detection)
+        self.recheck_reasons.append(recheck_reason)
         if self.scenario == "match":
             return make_mitigation(detection, ("T1110",), 0.85, "block_source_ip")
         if self.scenario == "no_match":

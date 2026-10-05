@@ -13,11 +13,25 @@ Failure handling:
     no mitigation manager configured (e.g. not built yet) -> same as above
     judge fails      -> error recorded, no final response
 
-Week 9 adds the Judge's recheck requests (sending a case back to a manager).
+Rechecks (two-way coordination): the pipeline gives the Judge a callback,
+JudgeInput.recheck(manager, reason). When the agent-mode Judge asks for one:
+
+    "detection"   Detection Manager runs again with recheck_reason, then the
+                  Mitigation Manager runs again (normally) on the new result,
+                  since its analysis is built on Detection's output.
+    "mitigation"  Mitigation Manager runs again with recheck_reason.
+
+Each manager can be rechecked at most once per case. The run keeps the latest
+conclusions in run.detection / run.mitigation, the Judge records each recheck
+(run.rechecks), and the time is in timings_ms["recheck_<manager>"] (it is also
+part of the "judge" time, since the recheck happens while the Judge works).
+If the manager fails during a recheck, the error is recorded and the Judge
+carries on with the earlier conclusions.
 """
 import logging
 import time
-from typing import Any, Callable, Optional
+from dataclasses import replace
+from typing import Any, Callable, List, Optional
 
 from src.shared.schemas import JudgeInput, PipelineRun, TrafficEvent
 
@@ -25,10 +39,14 @@ logger = logging.getLogger(__name__)
 
 
 class Pipeline:
-    def __init__(self, detection_manager, judge, mitigation_manager: Optional[Any] = None):
+    def __init__(self, detection_manager, judge, mitigation_manager: Optional[Any] = None,
+                 on_stage: Optional[Callable[[str], None]] = None):
+        """`on_stage(name)` is called as each stage (or recheck) starts, so a UI
+        can show progress. Optional; errors in it are logged and ignored."""
         self.detection_manager = detection_manager
         self.mitigation_manager = mitigation_manager
         self.judge = judge
+        self.on_stage = on_stage
 
     def run(self, event: TrafficEvent) -> PipelineRun:
         run = PipelineRun(event=event)
@@ -45,17 +63,68 @@ class Pipeline:
                 run, "mitigation", lambda: self.mitigation_manager.run(run.detection)
             )
 
-        judge_input = JudgeInput(
+        available = ["detection"] + (["mitigation"] if self.mitigation_manager is not None else [])
+        judge_input = self._judge_input(run, available)
+        run.response = self._stage(run, "judge", lambda: self.judge.run(judge_input))
+        if run.response is not None:
+            run.rechecks = list(run.response.rechecks)
+        return run
+
+    # --- rechecks --------------------------------------------------------------
+
+    def _judge_input(self, run: PipelineRun, available: List[str]) -> JudgeInput:
+        return JudgeInput(
             detection=run.detection,
             mitigation=run.mitigation,
             mitigation_error=run.errors.get("mitigation"),
+            recheck=lambda manager, reason: self._recheck(run, available, manager, reason),
+            rechecks_available=list(available),
         )
-        run.response = self._stage(run, "judge", lambda: self.judge.run(judge_input))
-        return run
 
-    @staticmethod
-    def _stage(run: PipelineRun, name: str, fn: Callable[[], Any]) -> Any:
+    def _recheck(self, run: PipelineRun, available: List[str], manager: str, reason: str) -> JudgeInput:
+        """Re-run one manager for the Judge and return the updated JudgeInput.
+        Raises if that manager fails, so the Judge can record it."""
+        if manager not in available:
+            raise ValueError(f"Recheck of {manager!r} not available (remaining: {available}).")
+        available.remove(manager)  # once per manager, even if this attempt fails
+        self._notify(f"recheck_{manager}")
+        logger.info("Recheck %s: %s", manager, reason)
+        start = time.perf_counter()
+        try:
+            if manager == "detection":
+                run.detection = self.detection_manager.run(run.event, recheck_reason=reason)
+                # Mitigation's analysis is built on Detection's output, so refresh it too.
+                run.errors.pop("mitigation", None)
+                if self.mitigation_manager is not None:
+                    try:
+                        run.mitigation = self.mitigation_manager.run(run.detection)
+                    except Exception as exc:
+                        run.mitigation = None
+                        run.errors["mitigation"] = f"{type(exc).__name__}: {exc}"
+                        logger.exception("Mitigation failed after the Detection recheck")
+                else:
+                    run.errors["mitigation"] = "Mitigation Manager not configured"
+            else:
+                run.mitigation = self.mitigation_manager.run(run.detection, recheck_reason=reason)
+                run.errors.pop("mitigation", None)
+        except Exception as exc:
+            run.errors[f"recheck_{manager}"] = f"{type(exc).__name__}: {exc}"
+            raise
+        finally:
+            run.timings_ms[f"recheck_{manager}"] = (time.perf_counter() - start) * 1000
+        return self._judge_input(run, available)
+
+    def _notify(self, name: str) -> None:
+        if self.on_stage is None:
+            return
+        try:
+            self.on_stage(name)
+        except Exception:  # a progress display must never break a run
+            logger.exception("on_stage callback failed for %s", name)
+
+    def _stage(self, run: PipelineRun, name: str, fn: Callable[[], Any]) -> Any:
         """Run one stage, recording its duration, and its error if it raises."""
+        self._notify(name)
         logger.info("Stage %s: start", name)
         start = time.perf_counter()
         try:
