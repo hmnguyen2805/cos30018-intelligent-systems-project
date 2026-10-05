@@ -44,6 +44,15 @@ DEFAULT_CIRCUIT_BREAKER_THRESHOLD = 3
 # models. resolve_llm_mode() defaults to single_shot for ollama_chat/* regardless of this
 # constant. See docs/design-decisions.md (agent vs single_shot).
 DEFAULT_LLM_MODE = "agent"
+def _recheck_clause(recheck_reason: Optional[str]) -> str:
+    """Prompt text for a Judge-requested recheck ("" otherwise). The reason is
+    context for the explanation only — it can't change any decision."""
+    if recheck_reason is None:
+        return ""
+    return (f" The Judge asked for a recheck: {recheck_reason}. Address that in your explanation "
+            "only where the data supports it.")
+
+
 GROUNDING_TOP_K = 5  # feature count used both to ground the LLM and to check its explanation
 RAW_OUTPUT_LOG_CHARS = 500  # truncation length for raw LLM text logged into the trace/CSV
 
@@ -268,25 +277,29 @@ class LLMExplanationLayer:
 
     def explain(
         self, event: TrafficEvent, p_anomalous: float, vote_std: Optional[float],
-        chosen_category: str, category_probability: Optional[float],
+        chosen_category: str, category_probability: Optional[float], recheck_reason: Optional[str] = None,
     ) -> Optional[dict]:
-        """Explain an already-decided anomalous event. Returns a validated
+        """Explain an already-decided anomalous event. A recheck_reason (the
+        Judge's) is put in the prompt and bypasses the circuit breaker — a
+        recheck is rare and explicitly requested. Returns a validated
         {"explanation", "tools_used"} dict, or None on any failure — circuit
         open, timeout, error, invalid/ungrounded output — the caller
         (DetectionSubagent._apply_llm_layer) falls back to a template note
         either way. Never raises."""
-        if self._circuit_open:
+        if self._circuit_open and recheck_reason is None:
             self._log_step(
                 thought="Circuit breaker is open after repeated LLM failures — skipping the "
                         "LLM layer for this event.",
                 action="llm_circuit_open",
             )
             return None
-        return self._run_llm_layer(event, p_anomalous, vote_std, chosen_category, category_probability)
+        return self._run_llm_layer(
+            event, p_anomalous, vote_std, chosen_category, category_probability, recheck_reason,
+        )
 
     def _run_llm_layer(
         self, event: TrafficEvent, p_anomalous: float, vote_std: Optional[float],
-        chosen_category: str, category_probability: Optional[float],
+        chosen_category: str, category_probability: Optional[float], recheck_reason: Optional[str] = None,
     ) -> Optional[dict]:
         """Run the bounded LLM call with a wall-clock timeout and validate
         its output. Returns a validated {"explanation", "tools_used"} dict,
@@ -315,10 +328,14 @@ class LLMExplanationLayer:
         outcome: dict = {}
         step_buffer: List[dict] = []
 
+        # Only passed on a recheck, so the default path calls _call_llm_agent exactly as before.
+        extra = {"recheck_reason": recheck_reason} if recheck_reason is not None else {}
+
         def worker():
             try:
                 outcome["raw_output"] = self._call_llm_agent(
                     event, p_anomalous, vote_std, chosen_category, category_probability, step_buffer, mode,
+                    **extra,
                 )
             except Exception as exc:  # noqa: BLE001 - captured for the main thread to log
                 outcome["error"] = exc
@@ -417,6 +434,7 @@ class LLMExplanationLayer:
     def _call_llm_agent(
         self, event: TrafficEvent, p_anomalous: float, vote_std: Optional[float],
         chosen_category: str, category_probability: Optional[float], step_buffer: List[dict], mode: str,
+        recheck_reason: Optional[str] = None,
     ) -> str:
         """Register the event under a short event_id, dispatch to the agent
         loop or single_shot per `mode`, and return raw (unvalidated)
@@ -434,11 +452,11 @@ class LLMExplanationLayer:
             if mode == "single_shot":
                 return self._call_llm_single_shot(
                     event_id, p_anomalous, vote_std, chosen_category, category_probability,
-                    tools_by_name, step_buffer,
+                    tools_by_name, step_buffer, recheck_reason,
                 )
             return self._call_llm_agent_loop(
                 event_id, p_anomalous, vote_std, chosen_category, category_probability,
-                tools_by_name, step_buffer,
+                tools_by_name, step_buffer, recheck_reason,
             )
         finally:
             try:
@@ -451,7 +469,7 @@ class LLMExplanationLayer:
     def _call_llm_agent_loop(
         self, event_id: str, p_anomalous: float, vote_std: Optional[float],
         chosen_category: str, category_probability: Optional[float],
-        tools_by_name: dict, step_buffer: List[dict],
+        tools_by_name: dict, step_buffer: List[dict], recheck_reason: Optional[str] = None,
     ) -> str:
         """DETECTION_LLM_MODE=agent: run smolagents' ToolCallingAgent over a
         subset of the MCP tools (never the raw feature dict — see
@@ -480,6 +498,7 @@ class LLMExplanationLayer:
             + (f", tree_vote_std={vote_std:.3f}." if vote_std is not None else ".")
             + f" Code has already determined this event's category: {chosen_category}"
             + (f" (probability={category_probability:.3f})." if category_probability is not None else ".")
+            + _recheck_clause(recheck_reason)
             + " Investigate with the available tools, then call final_answer with your JSON "
               "answer (explanation and tools_used only — do not state a category)."
         )
@@ -508,7 +527,7 @@ class LLMExplanationLayer:
     def _call_llm_single_shot(
         self, event_id: str, p_anomalous: float, vote_std: Optional[float],
         chosen_category: str, category_probability: Optional[float],
-        tools_by_name: dict, step_buffer: List[dict],
+        tools_by_name: dict, step_buffer: List[dict], recheck_reason: Optional[str] = None,
     ) -> str:
         """DETECTION_LLM_MODE=single_shot: code calls the needed MCP tools
         directly, then one litellm call with response_format=ANSWER_JSON_SCHEMA
@@ -537,6 +556,7 @@ class LLMExplanationLayer:
             + (f" (probability={category_probability:.3f})." if category_probability is not None else ".")
             + f" Most relevant features (top_features result): {features_summary}."
             + (f" tree_vote_spread result: {vote_summary}." if vote_summary is not None else "")
+            + _recheck_clause(recheck_reason)
         )
 
         model_id = resolve_llm_model_id()

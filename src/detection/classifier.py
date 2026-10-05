@@ -8,7 +8,9 @@ Two separate artifacts, both produced by src/detection/training/:
   BENIGN vs anomalous.
 - Category (train_category.py -> DEFAULT_CATEGORY_MODEL_PATH):
   {"category_model": RandomForestClassifier, "classes", "feature_names"}.
-  Multiclass attack category; trained on anomalous rows only.
+  Multiclass FINE attack label (CICIDS2017's own vocabulary, see
+  training/data.FINE_LABEL_TO_CATEGORY) plus an explicit Benign class; coarse
+  categories are derived by summing fine-label probabilities (coarse_probabilities).
 
 Both store feature_names in training-time column order, used to turn a
 TrafficEvent's feature dict into a matching row (see _feature_vector).
@@ -21,6 +23,8 @@ from typing import Dict, List, Optional, Tuple
 
 import joblib
 import numpy as np
+
+from src.detection.training import data
 
 DEFAULT_BINARY_MODEL_PATH = str(Path(__file__).resolve().parents[2] / "models" / "detection_binary.joblib")
 DEFAULT_CATEGORY_MODEL_PATH = str(Path(__file__).resolve().parents[2] / "models" / "detection_category.joblib")
@@ -40,7 +44,7 @@ _DEVIATION_SCALE_EPSILON = 1e-6
 
 # The category model's explicit "benign" class — see docs/design-decisions.md for why it
 # exists and subagent.py._choose_category for the disagreement handling when it's the top vote.
-BENIGN_CATEGORY = "Benign"
+BENIGN_CATEGORY = data.BENIGN_LABEL
 
 
 def load_artifact(path: str) -> dict:
@@ -100,18 +104,43 @@ def tree_vote_spread(artifact: dict, features: Dict[str, float]) -> Tuple[float,
     return float(votes.mean()), float(votes.std())
 
 
-def predict_attack_category(category_artifact: dict, features: Dict[str, float], top_k: int = 3) -> List[dict]:
-    """Per-category probabilities for one event, from the multiclass
-    category model (train_category.py — trained on anomalous rows only, so
-    this is only meaningful for an event already believed anomalous).
-    Returns the top_k categories sorted by probability, descending, each as
-    {"category": str, "probability": float}."""
+def coarse_category(fine_label: str) -> str:
+    """Coarse group of a fine label (Benign's group is BENIGN_CATEGORY).
+    Raises on a label outside the fine vocabulary — e.g. an old coarse-trained
+    artifact — rather than silently mis-grouping it."""
+    if fine_label not in data.FINE_LABEL_TO_CATEGORY:
+        raise ValueError(
+            f"Category artifact has label {fine_label!r}, not in the fine-label vocabulary — "
+            "retrain: `python -m src.detection.train`."
+        )
+    return data.FINE_LABEL_TO_CATEGORY[fine_label] or BENIGN_CATEGORY
+
+
+def coarse_probabilities(fine_probabilities: Dict[str, float]) -> Dict[str, float]:
+    """Coarse-category probability = sum of its fine labels' probabilities."""
+    totals: Dict[str, float] = {}
+    for label, p in fine_probabilities.items():
+        group = coarse_category(label)
+        totals[group] = totals.get(group, 0.0) + float(p)
+    return totals
+
+
+def predict_attack_category(category_artifact: dict, features: Dict[str, float], top_k: int = 3) -> dict:
+    """Category-model output for one event: {"labels": top_k fine labels,
+    "categories": every coarse group}, each a descending list of
+    {"label"|"category": str, "probability": float}. Coarse probabilities
+    are aggregated from the fine ones (coarse_probabilities)."""
     model = category_artifact["category_model"]
     X = _feature_vector(category_artifact, features)
     proba = model.predict_proba(X)[0]
     classes = category_artifact.get("classes") or list(model.classes_)
-    ranked = sorted(zip(classes, proba), key=lambda pair: pair[1], reverse=True)
-    return [{"category": category, "probability": float(p)} for category, p in ranked[:top_k]]
+    fine = dict(zip(classes, proba))
+    labels = sorted(fine.items(), key=lambda pair: pair[1], reverse=True)
+    categories = sorted(coarse_probabilities(fine).items(), key=lambda pair: pair[1], reverse=True)
+    return {
+        "labels": [{"label": label, "probability": float(p)} for label, p in labels[:top_k]],
+        "categories": [{"category": category, "probability": float(p)} for category, p in categories],
+    }
 
 
 def _direction(value: float, median: Optional[float], scale: Optional[float]) -> Optional[str]:
@@ -181,3 +210,69 @@ def top_features(artifact: dict, features: Dict[str, float], k: int = 5) -> List
         result.append(make_entry(idx, "context"))
 
     return result
+
+
+# Well-known destination ports named in the traffic summary.
+SERVICE_BY_PORT = {
+    21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP", 53: "DNS", 80: "HTTP", 110: "POP3", 123: "NTP",
+    143: "IMAP", 443: "HTTPS", 445: "SMB", 3306: "MySQL", 3389: "RDP", 8080: "HTTP-alt",
+}
+
+
+def _format_duration(microseconds: float) -> str:
+    """CICIDS2017's Flow Duration is in microseconds."""
+    if microseconds < 1_000:
+        return f"{microseconds:g} µs"
+    if microseconds < 1_000_000:
+        return f"{microseconds / 1_000:.1f} ms"
+    return f"{microseconds / 1_000_000:.2f} s"
+
+
+def _is_microseconds(name: str) -> bool:
+    """CICIDS2017 time features, all in microseconds."""
+    return name == "Flow Duration" or "IAT" in name or name.startswith(("Active", "Idle"))
+
+
+def describe_flow(artifact: dict, features: Dict[str, float], top_k: int = 0) -> Optional[str]:
+    """One plain-English sentence about THIS single flow, built by code (never
+    an LLM) from the context features present in `features`, each with its
+    above/below/near-median direction when the artifact has medians. Says
+    nothing about other connections or source hosts — a flow row has none of
+    that. Missing features are left out; None when there is nothing to say.
+    top_k > 0 (a recheck) appends the k most unusual features for this flow."""
+    medians = artifact.get("feature_medians")
+    scales = artifact.get("feature_mad") or {}
+
+    def item(name: str, label: str, fmt=lambda v: f"{v:g}") -> Optional[str]:
+        if name not in features:
+            return None
+        value = float(features[name])
+        direction = _direction(value, medians.get(name), scales.get(name)) if medians else None
+        return f"{label} {fmt(value)}" + (f" ({direction} the training median)" if direction else "")
+
+    parts = [p for p in (
+        item("Flow Duration", "duration", _format_duration),
+        item("Total Fwd Packets", "forward packets"),
+        item("Total Backward Packets", "backward packets"),
+        item("SYN Flag Count", "SYN flags"),
+        item("FIN Flag Count", "FIN flags"),
+        item("RST Flag Count", "RST flags"),
+    ) if p]
+
+    port_text = None
+    if "Destination Port" in features:
+        port = int(features["Destination Port"])
+        service = SERVICE_BY_PORT.get(port)
+        port_text = f" to destination port {port}" + (f" ({service})" if service else "")
+
+    if top_k > 0:
+        unusual = [e for e in top_features(artifact, features, k=top_k) if e["source"] == "top_k"]
+        parts.append("most unusual features: " + ", ".join(
+            f"{e['name']} {_format_duration(e['value']) if _is_microseconds(e['name']) else format(e['value'], 'g')}"
+            + (f" ({e['direction']} the training median)" if e.get("direction") else "")
+            for e in unusual
+        ))
+
+    if port_text is None and not parts:
+        return None
+    return "Single flow" + (port_text or "") + (": " + ", ".join(parts) if parts else "") + "."

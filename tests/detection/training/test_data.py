@@ -199,8 +199,33 @@ def test_infiltration_maps_to_infiltration():
     assert data.map_cicids_label_to_category("Infiltration") == "Infiltration"
 
 
-def test_heartbleed_maps_to_unknown():
-    assert data.map_cicids_label_to_category("Heartbleed") == "Unknown"
+def test_heartbleed_has_its_own_category():
+    assert data.map_cicids_label_to_category("Heartbleed") == "Heartbleed"
+    assert "Heartbleed" in data.ALLOWED_CATEGORIES
+
+
+def test_fine_label_normalises_the_mangled_web_attack_separator():
+    assert data.map_cicids_label_to_fine("Web Attack � Brute Force") == "Web Attack - Brute Force"
+    assert data.map_cicids_label_to_fine("Web Attack � XSS") == "Web Attack - XSS"
+    assert data.map_cicids_label_to_fine("Web Attack � Sql Injection") == "Web Attack - Sql Injection"
+
+
+def test_fine_label_keeps_other_labels_and_benign_becomes_benign():
+    assert data.map_cicids_label_to_fine("BENIGN") == "Benign"
+    assert data.map_cicids_label_to_fine("DoS slowloris") == "DoS slowloris"
+    assert data.map_cicids_label_to_fine("  portscan ") == "PortScan"
+
+
+def test_fine_label_is_idempotent_and_none_for_unrecognized_or_non_string():
+    assert data.map_cicids_label_to_fine("Web Attack - XSS") == "Web Attack - XSS"
+    assert data.map_cicids_label_to_fine("Some Future Attack") is None
+    assert data.map_cicids_label_to_fine(None) is None
+
+
+def test_every_fine_label_maps_to_an_allowed_category_or_none_for_benign():
+    for fine, coarse in data.FINE_LABEL_TO_CATEGORY.items():
+        assert data.map_cicids_label_to_category(fine) == coarse
+        assert coarse is None or coarse in data.ALLOWED_CATEGORIES
 
 
 def test_mapping_is_case_and_whitespace_insensitive():
