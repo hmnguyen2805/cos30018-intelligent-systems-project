@@ -64,10 +64,21 @@ class FeatureEntry(BaseModel):
     source: str
 
 
-class CategoryPrediction(BaseModel):
-    """One entry of a predict_attack_category result."""
+class LabelProbability(BaseModel):
+    label: str
+    probability: float
+
+
+class CategoryProbability(BaseModel):
     category: str
     probability: float
+
+
+class CategoryPrediction(BaseModel):
+    """predict_attack_category result: top fine labels, and every coarse
+    group's probability (the sum of its fine labels')."""
+    labels: List[LabelProbability]
+    categories: List[CategoryProbability]
 
 
 @mcp.tool()
@@ -103,15 +114,15 @@ def tree_vote_spread(event_id: str) -> VoteSpread:
 
 
 @mcp.tool()
-def predict_attack_category(event_id: str, top_k: int = 3) -> List[CategoryPrediction]:
-    """Top-k category probabilities for the registered event, descending.
-    Code has already decided this event's actual category before you were
-    called; this is for your own investigation only, it changes nothing."""
+def predict_attack_category(event_id: str, top_k: int = 3) -> CategoryPrediction:
+    """Top-k fine-label probabilities plus all coarse-group probabilities for
+    the registered event, each descending. Code has already decided this
+    event's actual label/category before you were called; this is for your
+    own investigation only, it changes nothing."""
     features = _features_for(event_id)
-    return [
-        CategoryPrediction(**entry)
-        for entry in classifier.predict_attack_category(_get_category_artifact(), features, top_k=top_k)
-    ]
+    return CategoryPrediction(
+        **classifier.predict_attack_category(_get_category_artifact(), features, top_k=top_k)
+    )
 
 
 @mcp.tool()

@@ -100,13 +100,14 @@ TrafficEvent
                               passes                 fails / times out / errors
                                  |                          |
                                  v                          v
-                      "[category=X] explanation"   template note, "[category=X] ..."
-                      (X = code's chosen category   (X = code's chosen category either way;
+                      "[category=X] [label=Y] <summary> explanation"   template note, same prefix
+                      (X, Y = code's chosen category/label   (same X, Y either way;
                       either way)                    + counts toward the circuit breaker)
 ```
 
-`DetectionResult.detector_notes` always carries a `[category=...]` tag for
-every truly-anomalous event, **regardless of `use_llm`** — the category
+`DetectionResult.detector_notes` always carries a `[category=X] [label=Y]`
+tag pair for every truly-anomalous event (X = coarse category, Y = fine
+CICIDS2017 label or `Unknown`; see the decision below), **regardless of `use_llm`** — the category
 decision is a deterministic classifier call (see below), not an LLM output,
 so it happens whether or not the LLM layer runs at all. The Correlation
 Subagent embeds this text to search its technique catalog.
@@ -196,29 +197,84 @@ event, whether or not `use_llm` is set):
 
 1. Calls `classifier.predict_attack_category(category_artifact,
    event.features, top_k=3)` — a multiclass RandomForest
-   (`train_category.py`, trained on TRAIN-split anomalous rows only)
-   returns per-category probabilities, ranked descending.
-2. If the top class's probability `>= CATEGORY_CONFIDENCE_THRESHOLD`
-   (default `0.6`, `DetectionSubagent(category_confidence_threshold=...)`),
-   that class is the chosen category. Otherwise the chosen category is
-   `"Unknown"` — reporting a low-confidence guess as if it were solid is
-   worse than admitting the model isn't sure.
-3. **If the top class is `classifier.BENIGN_CATEGORY` ("Benign")**, the
-   binary model (which already called this event anomalous) and the
-   category model disagree — the chosen category is `"Unknown"` (never
-   `"Benign"`, which would contradict `is_anomalous=True`), logged as its
-   own `action="model_disagreement"` trace step, and this overrides the
-   confidence threshold entirely: even a *high-confidence* Benign vote is a
-   disagreement, not a trustworthy answer. See
-   [design-decisions.md](design-decisions.md) for why Benign is a class in
-   the category model at all.
-4. Otherwise: this is logged as its own trace step
-   (`action="category_decision"`, `tool_input` carries `chosen_category`,
-   `raw_top_category`, `raw_top_probability`, and `threshold`) so
-   `evaluate.py` can report both the thresholded decision and the
-   classifier's raw top-1 accuracy from the same run.
+   (`train_category.py`) over the **fine CICIDS2017 labels plus Benign**
+   (e.g. `DoS Hulk`, `Web Attack - XSS`, `Heartbleed`; the table is
+   `data.FINE_LABEL_TO_CATEGORY`). It returns the top-3 fine labels and the
+   probability of every **coarse group**, where a group's probability is the
+   **sum of its fine labels' probabilities** (`classifier.coarse_probabilities`).
+2. `subagent.decide_category` applies the **three-way rule** at
+   `CATEGORY_CONFIDENCE_THRESHOLD` (default `0.80`,
+   `DetectionSubagent(category_confidence_threshold=...)`), Benign first:
+   - top fine label *or* top group is Benign -> label `Unknown`, category
+     `Unknown`, logged as `model_disagreement` (see 3);
+   - else top fine label `>= threshold` -> `[label=<that label>]`,
+     `[category=<its group>]`;
+   - else top group `>= threshold` -> `[label=Unknown]`,
+     `[category=<that group>]` (e.g. probability split across DoS sub-types:
+     the family is trusted, the sub-type is not);
+   - else both `Unknown` — reporting a low-confidence guess as solid is
+     worse than admitting the model isn't sure.
+3. **A Benign top vote** means the binary model (which called this event
+   anomalous) and the category model disagree — both outputs are
+   `"Unknown"` (never `"Benign"`, which would contradict
+   `is_anomalous=True`), logged as its own `action="model_disagreement"`
+   trace step, overriding the threshold entirely. See
+   [design-decisions.md](design-decisions.md) for why Benign is a class.
+4. Otherwise logged as `action="category_decision"`; `tool_input` carries
+   `chosen_label`, `chosen_category`, `raw_top_label`,
+   `raw_top_label_probability`, `raw_top_category`, `raw_top_probability`
+   (the top *group's* probability) and `threshold`, so `evaluate.py` can
+   report both the thresholded decision and the raw top-1.
 5. No category model loaded (backward compatibility) → logged as
-   `category_model_unavailable`, category is always `"Unknown"`.
+   `category_model_unavailable`, label and category are both `"Unknown"`.
+
+## Notes format, traffic summary and recheck
+
+`detector_notes` for an anomalous event is
+`[category=X] [label=Y] <summary> [<recheck evidence>] [<LLM explanation or
+template note>] [<borderline note>]`, assembled by `subagent._compose_notes`
+— tags first, so `src/shared/tags.parse_category` keeps working and
+`strip_category_tag` leaves `[label=Y] <summary> ...` for Correlation's text
+search.
+
+`<summary>` is `classifier.describe_flow`: one deterministic sentence from the
+context features present in the event (Destination Port with a service name
+for common ports, Flow Duration, Total Fwd/Backward Packets, SYN/FIN/RST
+counts) and the code-computed above/below/near-median direction from the
+binary artifact's medians/MAD. Missing features are skipped; with none
+present there is no summary. It describes one flow only — no claims about
+other connections or source IPs. No LLM is involved.
+
+`DetectionResult.attack_label`, `attack_category`, `category_confidence` (the
+top group's probability) and `traffic_summary` are set only if the dataclass
+has those fields (`hasattr`), so Detection works before and after the schema
+change.
+
+**Recheck (Judge).** `DetectionManager.run(event, recheck_reason=None)` /
+`DetectionSubagent.run(event, recheck_reason=None)`. The default call is
+byte-for-byte unchanged (the manager only forwards the argument when set).
+`is_anomalous`/`confidence` come from the same code path as a normal run —
+the extra tree-vote inspection on a non-borderline event is evidence only —
+so a recheck can never flip a decision. It adds: a `recheck` trace step with
+the reason (the reason is NOT written into the notes: Correlation embeds the
+notes text, so it would bias its technique search; the notes only get a neutral
+`Recheck evidence:` prefix); top-3 fine labels and coarse groups with probabilities and the
+tree vote spread in the notes; `top_features` k=10 appended to the summary (microsecond features — Flow
+Duration, `*IAT*`, `Active*`, `Idle*` — shown with units, not raw µs);
+and, with `use_llm=True`, a forced LLM explanation (the circuit breaker is
+bypassed; `LLMExplanationLayer.explain(..., recheck_reason=)` puts the reason
+in the prompt). The reason is cleaned to a single bracket-free line of at
+most 300 characters before it reaches the trace or the prompt.
+
+**Contract with downstream agents.** `[category=X]` is unchanged in meaning
+and vocabulary (`DoS`, `DDoS`, `PortScan`, `BruteForce`, `WebAttack`,
+`Botnet`, `Infiltration`, plus the new `Heartbleed`, or `Unknown`), so
+anything that maps the coarse category keeps working; `[label=Y]` is the
+additive fine label. `DetectionResult.attack_category`/`attack_label` are
+populated by the subagent only if those fields exist on the dataclass
+(`hasattr`; `src/shared` owns the schema) — the tags are the contract today.
+An artifact trained on the old coarse labels is rejected with a "retrain"
+error rather than mis-grouped.
 
 The LLM never sees this as something to decide: its task prompt states the
 chosen category and its probability as a *given*, and its JSON schema

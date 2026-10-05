@@ -230,52 +230,73 @@ def test_assert_feature_names_match_raises_on_reordered_names():
 # --- predict_attack_category --------------------------------------------------
 
 def make_category_artifact(n_estimators=5, random_state=0):
-    """A tiny multiclass RandomForest, wrapped as train_category.py's
-    artifact shape."""
+    """A tiny multiclass RandomForest over fine labels, wrapped as
+    train_category.py's artifact shape. Two DoS sub-types share a group."""
     X = np.array([
         [0.0, 0.0], [0.1, 0.0], [0.0, 0.1],       # PortScan-ish
         [10.0, 10.0], [10.1, 10.0], [10.0, 10.1],  # DDoS-ish
-        [5.0, 0.0], [5.1, 0.0],                    # BruteForce-ish
+        [5.0, 0.0], [5.1, 0.0],                    # DoS Hulk-ish
+        [5.0, 5.0], [5.1, 5.0],                    # DoS slowloris-ish
     ])
     y = np.array(["PortScan", "PortScan", "PortScan", "DDoS", "DDoS", "DDoS",
-                  "BruteForce", "BruteForce"])
+                  "DoS Hulk", "DoS Hulk", "DoS slowloris", "DoS slowloris"])
     model = RandomForestClassifier(n_estimators=n_estimators, random_state=random_state)
     model.fit(X, y)
     return {"category_model": model, "classes": list(model.classes_), "feature_names": FEATURE_NAMES}
 
 
-def test_predict_attack_category_returns_top_k_sorted_descending():
-    artifact = make_category_artifact()
+def test_predict_attack_category_returns_top_k_fine_labels_sorted_descending():
     result = classifier.predict_attack_category(
-        artifact, {"duration": 10.0, "packet_count": 10.0}, top_k=2,
-    )
+        make_category_artifact(), {"duration": 10.0, "packet_count": 10.0}, top_k=2,
+    )["labels"]
     assert len(result) == 2
     assert result[0]["probability"] >= result[1]["probability"]
-    assert all(0.0 <= entry["probability"] <= 1.0 for entry in result)
-    assert all(isinstance(entry["category"], str) for entry in result)
+    assert all(isinstance(entry["label"], str) for entry in result)
 
 
-def test_predict_attack_category_top_class_matches_the_closest_training_cluster():
-    artifact = make_category_artifact()
+def test_predict_attack_category_top_label_matches_the_closest_training_cluster():
     result = classifier.predict_attack_category(
-        artifact, {"duration": 10.0, "packet_count": 10.0}, top_k=1,
+        make_category_artifact(), {"duration": 10.0, "packet_count": 10.0}, top_k=1,
     )
-    assert result[0]["category"] == "DDoS"
+    assert result["labels"][0]["label"] == "DDoS"
+    assert result["categories"][0]["category"] == "DDoS"
 
 
-def test_predict_attack_category_probabilities_sum_to_one_across_all_classes():
+def test_predict_attack_category_group_probabilities_sum_to_one_and_aggregate_fine_labels():
     artifact = make_category_artifact()
-    result = classifier.predict_attack_category(
-        artifact, {"duration": 5.0, "packet_count": 0.0}, top_k=len(artifact["classes"]),
-    )
-    assert sum(entry["probability"] for entry in result) == pytest.approx(1.0)
+    features = {"duration": 5.0, "packet_count": 2.5}  # between the two DoS clusters
+    result = classifier.predict_attack_category(artifact, features, top_k=len(artifact["classes"]))
+    fine = {e["label"]: e["probability"] for e in result["labels"]}
+    groups = {e["category"]: e["probability"] for e in result["categories"]}
+    assert sum(groups.values()) == pytest.approx(1.0)
+    assert groups["DoS"] == pytest.approx(fine["DoS Hulk"] + fine["DoS slowloris"])
+    assert [e["probability"] for e in result["categories"]] == sorted(groups.values(), reverse=True)
 
 
 def test_predict_attack_category_falls_back_to_model_classes_without_classes_key():
     artifact = make_category_artifact()
     del artifact["classes"]
     result = classifier.predict_attack_category(artifact, {"duration": 10.0, "packet_count": 10.0}, top_k=1)
-    assert result[0]["category"] in ["PortScan", "DDoS", "BruteForce"]
+    assert result["labels"][0]["label"] in ["PortScan", "DDoS", "DoS Hulk", "DoS slowloris"]
+
+
+# --- fine -> coarse aggregation -------------------------------------------------
+
+def test_coarse_probabilities_sum_fine_labels_per_group():
+    fine = {"Benign": 0.1, "DoS Hulk": 0.4, "DoS GoldenEye": 0.2, "DDoS": 0.1,
+            "Web Attack - XSS": 0.1, "Web Attack - Brute Force": 0.1}
+    coarse = classifier.coarse_probabilities(fine)
+    assert coarse == pytest.approx({"Benign": 0.1, "DoS": 0.6, "DDoS": 0.1, "WebAttack": 0.2})
+
+
+def test_coarse_category_gives_heartbleed_its_own_group_and_benign_its_own():
+    assert classifier.coarse_category("Heartbleed") == "Heartbleed"
+    assert classifier.coarse_category("Benign") == classifier.BENIGN_CATEGORY
+
+
+def test_coarse_category_rejects_labels_outside_the_fine_vocabulary():
+    with pytest.raises(ValueError, match="retrain"):
+        classifier.coarse_category("WebAttack")  # an old coarse-trained artifact's class
 
 
 def test_load_artifact_missing_path_raises_clear_error(tmp_path, monkeypatch):

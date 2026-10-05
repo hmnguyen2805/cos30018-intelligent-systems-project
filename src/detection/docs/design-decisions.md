@@ -118,6 +118,36 @@ its own investigation, but that never changes the outcome) — accepted
 because the classifier's own current accuracy (see
 [evaluation.md](evaluation.md)) is far higher than the LLM's ever was.
 
+## Fine CICIDS labels, coarse category derived in code
+
+**Decision:** Fine CICIDS labels requested by the Judge owner; coarse
+category derived in code so downstream mapping is unchanged.
+
+**What changed:** the category model predicts the 15 CICIDS2017 labels
+(Web Attack separator normalised to `Web Attack - XSS` etc., Benign kept)
+instead of 8 coarse categories. `[category=X]` is still emitted with the same
+vocabulary — now computed by summing fine-label probabilities
+(`classifier.coarse_probabilities`) — and `[label=Y]` is added. Decision rule:
+top fine label >= threshold -> label + its group; else top group >= threshold
+-> `Unknown` label + that group; else both `Unknown` (Benign top -> both
+`Unknown` + `model_disagreement`). Heartbleed became its own coarse category
+rather than `Unknown`, since `Unknown` now only means "low confidence".
+
+**Evidence:** coarse macro F1 over the same 7 classes was 0.936 before and
+0.935 after (threshold 0.90), so the coarse view did not regress. Fine macro
+F1 is 0.846 at 0.80, dragged down by Web Attack - XSS (F1 0.160) vs Brute
+Force — see [evaluation.md](evaluation.md).
+
+**Trade-offs:** (1) Sub-types the model cannot separate (XSS vs Brute Force)
+now produce wrong *fine* labels (73/426 web-attack flows at 0.80) even
+though the coarse category stays right — a known limitation consumers of
+`[label=Y]` should weigh. (2) Validation coarse accuracy at 0.90 fell to
+0.9896, just below the 0.99 bar, so the default threshold moved
+0.90 -> 0.80 by the existing rule (0.9931); FP categorisation rose from
+48.6% to 59.3%. (3) Models trained on coarse labels must be retrained; a
+stale artifact errors out loudly. The old coarse model is kept (gitignored)
+at `models/detection_category_coarse.joblib` for comparison.
+
 ## Two LLM modes: agent vs single_shot
 
 **Problem:** The agent loop (`ToolCallingAgent`, `DETECTION_LLM_MODE=agent`)

@@ -4,11 +4,13 @@ split carved from TRAIN for threshold selection) — no DetectionManager, no
 per-event loop. batch model.predict_proba() is simpler and far faster than
 looping DetectionManager.run() over hundreds of thousands of events.
 
-Reports binary precision/recall/F1/ROC-AUC, per-class category
-precision/recall/F1, false-positive categorisation rate, and a
+Reports binary precision/recall/F1/ROC-AUC, per-fine-label AND per-coarse-
+category precision/recall/F1 (coarse = the category the three-way decision in
+subagent.decide_category picked), false-positive categorisation rate, and a
 CATEGORY_CONFIDENCE_THRESHOLD sweep with a recommended value (never applied
-automatically). See docs/evaluation.md for exactly what's scored, why
-Heartbleed and Benign are handled specially, and current result tables.
+automatically). Classes with support < MIN_EVAL_SUPPORT are flagged "too small
+to evaluate". See docs/evaluation.md for exactly what's scored and why Benign
+is handled specially.
 """
 import csv
 import os
@@ -25,6 +27,7 @@ from src.detection.training import data
 
 RESULTS_DIR = Path(__file__).resolve().parent.parent / "results"
 CATEGORY_THRESHOLD_SWEEP = (0.5, 0.6, 0.7, 0.8, 0.9)
+MIN_EVAL_SUPPORT = 50
 
 
 def batch_predict_binary(binary_artifact: dict, X: np.ndarray):
@@ -58,71 +61,80 @@ def print_binary_report(report: dict) -> None:
           + (f"{report['roc_auc']:.4f}" if report["roc_auc"] is not None else "n/a"))
 
 
-def batch_predict_category(category_artifact: dict, X: np.ndarray, threshold: float):
-    """Vectorized equivalent of subagent.DetectionSubagent._choose_category.
-    Returns (chosen, raw_top_category, raw_top_probability, disagreement) —
-    chosen is "Unknown" wherever the top vote is BENIGN_CATEGORY or below
-    threshold; disagreement flags a BENIGN_CATEGORY top vote."""
+def batch_category_probabilities(category_artifact: dict, X: np.ndarray) -> dict:
+    """One predict_proba pass for a whole matrix: fine-label probabilities and
+    the coarse-group probabilities aggregated from them (sum of each group's
+    fine labels, as classifier.coarse_probabilities does per event)."""
     model = category_artifact["category_model"]
-    classes = np.array(category_artifact.get("classes") or list(model.classes_))
-    proba = model.predict_proba(X)
-    top_idx = np.argmax(proba, axis=1)
-    raw_top_category = classes[top_idx]
-    raw_top_probability = proba[np.arange(len(X)), top_idx]
-
-    disagreement = raw_top_category == classifier.BENIGN_CATEGORY
-    below_threshold = raw_top_probability < threshold
-    chosen = np.where(disagreement | below_threshold, "Unknown", raw_top_category)
-    return chosen, raw_top_category, raw_top_probability, disagreement
+    labels = np.array(category_artifact.get("classes") or list(model.classes_))
+    fine = np.asarray(model.predict_proba(X))
+    groups = np.array([classifier.coarse_category(label) for label in labels])
+    categories = np.unique(groups)
+    coarse = np.stack([fine[:, groups == c].sum(axis=1) for c in categories], axis=1)
+    return {"labels": labels, "fine": fine, "categories": categories, "coarse": coarse}
 
 
-def is_heartbleed_label(raw_labels) -> np.ndarray:
-    """True wherever the raw CICIDS2017 Label is Heartbleed — the one true
-    label that maps to the same "Unknown" string a low-confidence punt uses.
-    Excluded from per-class scoring (see docs/evaluation.md) rather than
-    given its own class, since the model was never trained to tell them
-    apart."""
-    return np.array([isinstance(r, str) and r.strip().lower() == "heartbleed" for r in raw_labels])
+def decide_batch(probs: dict, threshold: float) -> dict:
+    """Vectorized subagent.decide_category over batch_category_probabilities'
+    output. Returns arrays: label, category (the decision), raw_label,
+    raw_category (top-1, unthresholded), disagreement (a Benign top vote)."""
+    n = len(probs["fine"])
+    fine_idx = probs["fine"].argmax(axis=1)
+    coarse_idx = probs["coarse"].argmax(axis=1)
+    raw_label = probs["labels"][fine_idx]
+    raw_category = probs["categories"][coarse_idx]
+    fine_p = probs["fine"][np.arange(n), fine_idx]
+    coarse_p = probs["coarse"][np.arange(n), coarse_idx]
+
+    disagreement = (raw_label == classifier.BENIGN_CATEGORY) | (raw_category == classifier.BENIGN_CATEGORY)
+    label_ok = ~disagreement & (fine_p >= threshold)
+    category_ok = ~disagreement & (coarse_p >= threshold)
+    raw_label_group = np.array([classifier.coarse_category(label) for label in raw_label])
+    label = np.where(label_ok, raw_label, "Unknown")
+    category = np.where(label_ok, raw_label_group, np.where(category_ok, raw_category, "Unknown"))
+    return {"label": label, "category": category, "raw_label": raw_label,
+            "raw_category": raw_category, "disagreement": disagreement}
 
 
-def scored_attack_mask(
-    true_label: np.ndarray, binary_pred: np.ndarray, true_category: np.ndarray,
-    is_heartbleed: Optional[np.ndarray] = None,
-) -> np.ndarray:
+def batch_predict_category(category_artifact: dict, X: np.ndarray, threshold: float) -> dict:
+    """Vectorized equivalent of subagent.DetectionSubagent._choose_category."""
+    return decide_batch(batch_category_probabilities(category_artifact, X), threshold)
+
+
+def scored_attack_mask(true_label: np.ndarray, binary_pred: np.ndarray, true_fine: np.ndarray) -> np.ndarray:
     """Same scoring rule as evaluate.compute_category_report: a true attack
-    the binary model also caught, with a known true_category. Excludes
-    Heartbleed rows too when `is_heartbleed` is given (see
-    is_heartbleed_label)."""
-    has_true_category = np.array([c is not None for c in true_category])
-    mask = (true_label == 1) & (binary_pred == 1) & has_true_category
-    if is_heartbleed is not None:
-        mask = mask & ~is_heartbleed
-    return mask
+    the binary model also caught, with a known true fine label."""
+    has_true_label = np.array([c is not None for c in true_fine])
+    return (true_label == 1) & (binary_pred == 1) & has_true_label
 
 
 def compute_offline_category_report(
-    true_category_for_table: np.ndarray, chosen_category: np.ndarray, raw_top_category: np.ndarray,
+    true_for_table: np.ndarray, chosen: np.ndarray, raw_top: np.ndarray,
     table_mask: np.ndarray, attack_mask: np.ndarray,
 ) -> dict:
     """Per-class precision/recall/F1 over table_mask (true attacks caught
     plus false positives scored as BENIGN_CATEGORY, so precision reflects
-    false alarms). accuracy/raw_accuracy/coverage/macro_f1 are computed over
-    attack_mask only (true attacks, Heartbleed excluded) — a false positive
-    is never a category to "get right". BENIGN_CATEGORY's own row is always
-    precision=recall=0, since it can never itself be predicted; its purpose
-    is only to penalize other classes' precision. See docs/evaluation.md."""
+    false alarms). Level-agnostic: pass fine labels or coarse categories.
+    accuracy/raw_accuracy/coverage/macro_f1 are computed over attack_mask only
+    (true attacks) — a false positive is never a label to "get right".
+    BENIGN_CATEGORY's own row is always precision=recall=0, since it can never
+    itself be predicted; its purpose is only to penalize other classes'
+    precision. Classes with support < MIN_EVAL_SUPPORT are listed in
+    "too_small"; macro_f1 averages every attack class, macro_f1_evaluable
+    only the ones large enough to evaluate. See docs/evaluation.md."""
     n = int(attack_mask.sum())
     n_table = int(table_mask.sum())
     if n == 0:
         return {"n": 0, "n_table": n_table, "accuracy": None, "raw_accuracy": None, "coverage": None,
-                "labels": [], "support": {}, "precision": {}, "recall": {}, "f1": {}, "macro_f1": None}
+                "labels": [], "support": {}, "precision": {}, "recall": {}, "f1": {}, "macro_f1": None,
+                "macro_f1_evaluable": None, "too_small": []}
 
-    true_attack = true_category_for_table[attack_mask]
-    chosen_attack = chosen_category[attack_mask]
-    raw_attack = raw_top_category[attack_mask]
+    true_attack = true_for_table[attack_mask]
+    chosen_attack = chosen[attack_mask]
+    raw_attack = raw_top[attack_mask]
 
-    true_table = true_category_for_table[table_mask]
-    chosen_table = chosen_category[table_mask]
+    true_table = true_for_table[table_mask]
+    chosen_table = chosen[table_mask]
 
     # "Unknown" is never its own label row — it still counts as a miss, just not its own row.
     attack_labels = sorted((set(true_attack.tolist()) | set(chosen_attack.tolist())) - {"Unknown"})
@@ -132,7 +144,9 @@ def compute_offline_category_report(
         true_table, chosen_table, labels=table_labels, zero_division=0,
     )
     f1_by_label = dict(zip(table_labels, f1))
-    macro_f1 = float(np.mean([f1_by_label[label] for label in attack_labels])) if attack_labels else None
+    support_by_label = {label: int(s) for label, s in zip(table_labels, support)}
+    too_small = [label for label in attack_labels if support_by_label[label] < MIN_EVAL_SUPPORT]
+    evaluable = [label for label in attack_labels if label not in too_small]
 
     return {
         "n": n,
@@ -141,30 +155,55 @@ def compute_offline_category_report(
         "raw_accuracy": float((raw_attack == true_attack).mean()),
         "coverage": float((chosen_attack != "Unknown").mean() * 100),
         "labels": table_labels,
-        "support": {label: int(s) for label, s in zip(table_labels, support)},
+        "support": support_by_label,
         "precision": {label: float(p) for label, p in zip(table_labels, precision)},
         "recall": {label: float(r) for label, r in zip(table_labels, recall)},
         "f1": f1_by_label,
-        "macro_f1": macro_f1,
+        "macro_f1": float(np.mean([f1_by_label[label] for label in attack_labels])) if attack_labels else None,
+        "macro_f1_evaluable": float(np.mean([f1_by_label[label] for label in evaluable])) if evaluable else None,
+        "too_small": too_small,
     }
 
 
-def print_offline_category_report(report: dict) -> None:
+def print_offline_category_report(report: dict, level: str = "category") -> None:
     if report["n"] == 0:
-        print("category classifier: no truly anomalous events with a known true category in this split")
+        print(f"{level} classifier: no truly anomalous events with a known true label in this split")
         return
-    print(f"category classifier (n={report['n']} true attacks the binary model also caught, "
+    macro = lambda v: f"{v:.4f}" if v is not None else "n/a"  # noqa: E731
+    print(f"{level} classifier (n={report['n']} true attacks the binary model also caught, "
           f"n_table={report['n_table']} incl. binary false positives as Benign):")
     print(f"  accuracy (thresholded)={report['accuracy']:.4f}  "
           f"raw top-1 accuracy={report['raw_accuracy']:.4f}  "
-          f"coverage={report['coverage']:.1f}%  macro F1 (attack classes only)="
-          + (f"{report['macro_f1']:.4f}" if report["macro_f1"] is not None else "n/a"))
-    label_col = "category"
-    header = f"    {label_col:<14}{'precision':>10}{'recall':>10}{'f1':>10}{'support':>10}"
-    print(header)
+          f"coverage={report['coverage']:.1f}%")
+    print(f"  macro F1 (attack classes only)={macro(report['macro_f1'])}  "
+          f"macro F1 excluding classes with support < {MIN_EVAL_SUPPORT}={macro(report['macro_f1_evaluable'])}")
+    print(f"    {level:<28}{'precision':>10}{'recall':>10}{'f1':>10}{'support':>10}")
     for label in report["labels"]:
-        print(f"    {label:<14}{report['precision'][label]:>10.3f}{report['recall'][label]:>10.3f}"
-              f"{report['f1'][label]:>10.3f}{report['support'][label]:>10d}")
+        flag = "  too small to evaluate" if label in report["too_small"] else ""
+        print(f"    {label:<28}{report['precision'][label]:>10.3f}{report['recall'][label]:>10.3f}"
+              f"{report['f1'][label]:>10.3f}{report['support'][label]:>10d}{flag}")
+
+
+def web_attack_confusion(true_fine: np.ndarray, chosen_label: np.ndarray, attack_mask: np.ndarray) -> dict:
+    """True-vs-chosen-label counts for the Web Attack fine labels over the
+    scored attacks, plus how many got a WRONG specific label (chosen is
+    neither the truth nor "Unknown", i.e. the wrong answer cleared the
+    threshold)."""
+    web = attack_mask & np.array([isinstance(t, str) and t.startswith("Web Attack") for t in true_fine])
+    rows = sorted(set(true_fine[web].tolist()))
+    cols = sorted(set(chosen_label[web].tolist()) | set(rows))
+    counts = {t: {c: int(((true_fine == t) & web & (chosen_label == c)).sum()) for c in cols} for t in rows}
+    wrong = int((web & (chosen_label != true_fine) & (chosen_label != "Unknown")).sum())
+    return {"rows": rows, "cols": cols, "counts": counts, "n": int(web.sum()), "n_wrong_confident": wrong}
+
+
+def print_web_attack_confusion(report: dict, threshold: float) -> None:
+    print(f"web attack confusion (true row vs predicted column, threshold={threshold:.2f}):")
+    print("    " + f"{'true / predicted':<28}" + "".join(f"{c:>28}" for c in report["cols"]))
+    for t in report["rows"]:
+        print("    " + f"{t:<28}" + "".join(f"{report['counts'][t][c]:>28d}" for c in report["cols"]))
+    print(f"  wrong fine label at confidence >= {threshold:.2f}: {report['n_wrong_confident']}/{report['n']} "
+          "web-attack flows")
 
 
 def compute_offline_false_positive_report(
@@ -198,34 +237,36 @@ def compute_model_disagreement_count(binary_pred: np.ndarray, disagreement: np.n
 
 
 def sweep_category_thresholds(
-    category_artifact: dict, X: np.ndarray, true_category: np.ndarray,
+    category_artifact: dict, X: np.ndarray, true_fine: np.ndarray, true_category: np.ndarray,
     binary_pred: np.ndarray, true_label: np.ndarray,
     thresholds: Sequence[float] = CATEGORY_THRESHOLD_SWEEP,
-    is_heartbleed: Optional[np.ndarray] = None,
 ) -> list:
-    """One row per threshold: category accuracy, % Unknown, and false-
-    positive categorisation rate, recomputed at each candidate threshold.
-    Callers pass a VALIDATION split (never TEST) so selecting a threshold
-    never tunes on test data."""
-    mask = scored_attack_mask(true_label, binary_pred, true_category, is_heartbleed)
+    """One row per threshold: coarse-category accuracy (the quantity the
+    recommendation rule uses), fine-label accuracy, % Unknown at each level,
+    and false-positive categorisation rate, recomputed at each candidate
+    threshold. Callers pass a VALIDATION split (never TEST) so selecting a
+    threshold never tunes on test data."""
+    mask = scored_attack_mask(true_label, binary_pred, true_fine)
+    n_scored = int(mask.sum())
+    probs = batch_category_probabilities(category_artifact, X)
     rows = []
     for threshold in thresholds:
-        chosen, _, _, _ = batch_predict_category(category_artifact, X, threshold)
-        n_scored = int(mask.sum())
+        decided = decide_batch(probs, threshold)
+        stats = {"category_accuracy": None, "pct_unknown": None, "label_accuracy": None, "pct_label_unknown": None}
         if n_scored:
-            scored_true = true_category[mask]
-            scored_chosen = chosen[mask]
-            category_accuracy = float((scored_chosen == scored_true).mean())
-            pct_unknown = float((scored_chosen == "Unknown").mean() * 100)
-        else:
-            category_accuracy = None
-            pct_unknown = None
-        fp_report = compute_offline_false_positive_report(true_label, binary_pred, chosen)
+            chosen_category = decided["category"][mask]
+            chosen_label = decided["label"][mask]
+            stats = {
+                "category_accuracy": float((chosen_category == true_category[mask]).mean()),
+                "pct_unknown": float((chosen_category == "Unknown").mean() * 100),
+                "label_accuracy": float((chosen_label == true_fine[mask]).mean()),
+                "pct_label_unknown": float((chosen_label == "Unknown").mean() * 100),
+            }
+        fp_report = compute_offline_false_positive_report(true_label, binary_pred, decided["category"])
         rows.append({
             "threshold": threshold,
             "n_scored": n_scored,
-            "category_accuracy": category_accuracy,
-            "pct_unknown": pct_unknown,
+            **stats,
             "n_fp": fp_report["n"],
             "fp_categorisation_rate": fp_report["pct_given_specific_category"],
         })
@@ -273,14 +314,14 @@ def describe_recommendation_rule(recommended: dict) -> str:
 
 def print_threshold_sweep(sweep_rows: list) -> None:
     print("CATEGORY_CONFIDENCE_THRESHOLD sweep (on a VALIDATION split carved from TRAIN):")
-    header = f"    {'threshold':>9}{'n_scored':>10}{'accuracy':>10}{'%unknown':>10}{'n_fp':>7}{'fp_rate':>9}"
-    print(header)
+    print(f"    {'threshold':>9}{'n_scored':>10}{'cat_acc':>9}{'%cat_unk':>10}{'label_acc':>11}"
+          f"{'%lbl_unk':>10}{'n_fp':>7}{'fp_rate':>9}")
+    fmt = lambda v, spec: format(v, spec) if v is not None else "n/a"  # noqa: E731
     for row in sweep_rows:
-        accuracy_text = f"{row['category_accuracy']:.3f}" if row["category_accuracy"] is not None else "n/a"
-        unknown_text = f"{row['pct_unknown']:.1f}" if row["pct_unknown"] is not None else "n/a"
-        fp_text = f"{row['fp_categorisation_rate']:.1f}" if row["fp_categorisation_rate"] is not None else "n/a"
-        print(f"    {row['threshold']:>9.2f}{row['n_scored']:>10d}{accuracy_text:>10}"
-              f"{unknown_text:>10}{row['n_fp']:>7d}{fp_text:>9}")
+        print(f"    {row['threshold']:>9.2f}{row['n_scored']:>10d}{fmt(row['category_accuracy'], '.3f'):>9}"
+              f"{fmt(row['pct_unknown'], '.1f'):>10}{fmt(row['label_accuracy'], '.3f'):>11}"
+              f"{fmt(row['pct_label_unknown'], '.1f'):>10}{row['n_fp']:>7d}"
+              f"{fmt(row['fp_categorisation_rate'], '.1f'):>9}")
 
 
 def save_threshold_sweep_csv(path: Path, sweep_rows: list) -> None:
@@ -293,10 +334,10 @@ def save_threshold_sweep_csv(path: Path, sweep_rows: list) -> None:
 
 
 def run_offline_evaluation(
-    default_threshold: float, min_category_accuracy: float = DEFAULT_MIN_CATEGORY_ACCURACY,
+    threshold: float, min_category_accuracy: float = DEFAULT_MIN_CATEGORY_ACCURACY,
 ) -> None:
     """Evaluate both classifiers over the whole TEST split at
-    default_threshold, then sweep CATEGORY_CONFIDENCE_THRESHOLD on a
+    `threshold`, then sweep CATEGORY_CONFIDENCE_THRESHOLD on a
     VALIDATION split and print a recommendation. Saves the sweep to
     results/category_threshold_sweep.csv. Never modifies any argument or
     training artifact."""
@@ -309,53 +350,61 @@ def run_offline_evaluation(
 
     print(f"=== Offline evaluation (full test split, n={len(test_df)}, no LLM) ===")
 
-    X_test = test_df[feature_names].to_numpy()
-    y_test = data.binarize_labels(test_df[data.LABEL_COL])
-    raw_labels_test = test_df[data.LABEL_COL].to_numpy()
-    true_category_test = np.array(
-        [data.map_cicids_label_to_category(raw) for raw in raw_labels_test], dtype=object,
-    )
-    is_heartbleed_test = is_heartbleed_label(raw_labels_test)
+    def truth(frame):
+        """(X, binary y, fine labels, coarse categories) for a split."""
+        raw = frame[data.LABEL_COL].to_numpy()
+        return (
+            frame[feature_names].to_numpy(), data.binarize_labels(frame[data.LABEL_COL]),
+            np.array([data.map_cicids_label_to_fine(r) for r in raw], dtype=object),
+            np.array([data.map_cicids_label_to_category(r) for r in raw], dtype=object),
+        )
+
+    X_test, y_test, true_fine_test, true_category_test = truth(test_df)
 
     binary_pred_test, binary_proba_test = batch_predict_binary(binary_artifact, X_test)
     print_binary_report(compute_binary_metrics(y_test, binary_pred_test, binary_proba_test))
 
-    chosen_test, raw_top_test, _, disagreement_test = batch_predict_category(
-        category_artifact, X_test, default_threshold,
-    )
-
-    attack_mask_test = scored_attack_mask(y_test, binary_pred_test, true_category_test, is_heartbleed_test)
-    heartbleed_excluded_test = int(
-        (scored_attack_mask(y_test, binary_pred_test, true_category_test) & is_heartbleed_test).sum()
-    )
+    attack_mask_test = scored_attack_mask(y_test, binary_pred_test, true_fine_test)
     fp_mask_test = (y_test == 0) & (binary_pred_test == 1)
     table_mask_test = attack_mask_test | fp_mask_test
-    true_for_table_test = np.where(fp_mask_test, classifier.BENIGN_CATEGORY, true_category_test)
+    fine_for_table = np.where(fp_mask_test, classifier.BENIGN_CATEGORY, true_fine_test)
+    category_for_table = np.where(fp_mask_test, classifier.BENIGN_CATEGORY, true_category_test)
+    test_probs = batch_category_probabilities(category_artifact, X_test)
 
-    print(f"(category decisions at threshold={default_threshold:.2f}, the current default; "
-          f"excluded {heartbleed_excluded_test} Heartbleed event(s) — true label is the same "
-          "\"Unknown\" string a low-confidence punt uses, so it isn't scored — see README)")
-    print_offline_category_report(
-        compute_offline_category_report(true_for_table_test, chosen_test, raw_top_test,
-                                         table_mask_test, attack_mask_test)
-    )
-    print_false_positive_report(compute_offline_false_positive_report(y_test, binary_pred_test, chosen_test))
+    def report_test(threshold: float) -> dict:
+        decided = decide_batch(test_probs, threshold)
+        print_offline_category_report(
+            compute_offline_category_report(fine_for_table, decided["label"], decided["raw_label"],
+                                            table_mask_test, attack_mask_test),
+            level="fine label",
+        )
+        print_offline_category_report(
+            compute_offline_category_report(category_for_table, decided["category"], decided["raw_category"],
+                                            table_mask_test, attack_mask_test),
+            level="coarse category",
+        )
+        print_false_positive_report(
+            compute_offline_false_positive_report(y_test, binary_pred_test, decided["category"])
+        )
+        print_web_attack_confusion(web_attack_confusion(true_fine_test, decided["label"], attack_mask_test), threshold)
+        return decided
+
+    from src.detection.subagent import DEFAULT_CATEGORY_CONFIDENCE_THRESHOLD as default_threshold
+
+    used = f"{threshold:.2f}" + (" (default)" if threshold == default_threshold else "")
+    print(f"(category decisions at threshold={used}; "
+          "coverage = % of true attacks given a non-Unknown answer at that level)")
+    decided_default = report_test(threshold)
     print(f"model disagreement count (binary anomalous, category top vote Benign): "
-          f"{compute_model_disagreement_count(binary_pred_test, disagreement_test)}")
+          f"{compute_model_disagreement_count(binary_pred_test, decided_default['disagreement'])}")
 
     print()
     _, validation_df = data.split_validation(train_df)
-    X_val = validation_df[feature_names].to_numpy()
-    y_val = data.binarize_labels(validation_df[data.LABEL_COL])
-    raw_labels_val = validation_df[data.LABEL_COL].to_numpy()
-    true_category_val = np.array(
-        [data.map_cicids_label_to_category(raw) for raw in raw_labels_val], dtype=object,
-    )
-    is_heartbleed_val = is_heartbleed_label(raw_labels_val)
+    X_val, y_val, true_fine_val, true_category_val = truth(validation_df)
     binary_pred_val, _ = batch_predict_binary(binary_artifact, X_val)
 
     sweep_rows = sweep_category_thresholds(
-        category_artifact, X_val, true_category_val, binary_pred_val, y_val, is_heartbleed=is_heartbleed_val,
+        category_artifact, X_val, true_fine_val, true_category_val, binary_pred_val, y_val,
     )
     print_threshold_sweep(sweep_rows)
 
@@ -369,21 +418,10 @@ def run_offline_evaluation(
         print("No recommendation: no scored true attacks in the validation split.")
         return
 
-    print(f"Recommendation rule: {describe_recommendation_rule(recommended)}")
+    print(f"Recommendation rule: {describe_recommendation_rule(recommended)} (coarse category accuracy)")
     print(f"Recommended CATEGORY_CONFIDENCE_THRESHOLD={recommended['threshold']:.2f} "
           f"(validation category accuracy={recommended['category_accuracy']:.3f}). "
           f"Current default is {default_threshold:.2f} — NOT changed automatically.")
 
     print(f"Recommended threshold's results on TEST (threshold={recommended['threshold']:.2f}):")
-    chosen_recommended_test, raw_top_recommended_test, _, _ = batch_predict_category(
-        category_artifact, X_test, recommended["threshold"],
-    )
-    print_offline_category_report(
-        compute_offline_category_report(
-            true_for_table_test, chosen_recommended_test, raw_top_recommended_test,
-            table_mask_test, attack_mask_test,
-        )
-    )
-    print_false_positive_report(
-        compute_offline_false_positive_report(y_test, binary_pred_test, chosen_recommended_test)
-    )
+    report_test(recommended["threshold"])

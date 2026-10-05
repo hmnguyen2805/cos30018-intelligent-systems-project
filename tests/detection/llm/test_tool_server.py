@@ -180,16 +180,18 @@ def fake_category_artifact(monkeypatch):
 
 def test_predict_attack_category_returns_category_predictions(fake_category_artifact):
     mcp_server.register_event("evt-1", sample_features())
-    result = mcp_server.predict_attack_category("evt-1", top_k=2)
-    assert len(result) == 2
-    assert all(isinstance(entry.category, str) for entry in result)
-    assert result[0].probability >= result[1].probability
+    result = mcp_server.predict_attack_category("evt-1", top_k=1)
+    assert len(result.labels) == 1
+    assert isinstance(result.labels[0].label, str)
+    # coarse group probabilities come back alongside, descending
+    assert {c.category for c in result.categories} == {"PortScan", "DDoS"}
+    assert result.categories[0].probability >= result.categories[1].probability
 
 
 def test_predict_attack_category_default_top_k_is_three(fake_category_artifact):
     mcp_server.register_event("evt-1", sample_features())
     result = mcp_server.predict_attack_category("evt-1")
-    assert len(result) <= 3  # only 2 classes exist in this fixture, capped by that
+    assert len(result.labels) <= 3  # only 2 classes exist in this fixture, capped by that
 
 
 def test_predict_attack_category_unknown_event_id_raises_key_error(fake_category_artifact):

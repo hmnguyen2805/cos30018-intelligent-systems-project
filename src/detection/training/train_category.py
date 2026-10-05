@@ -1,6 +1,7 @@
 """
-Trains a multiclass RandomForest predicting the attack CATEGORY, plus an
-explicit BENIGN_CATEGORY ("Benign") option so it can push back on the binary
+Trains a multiclass RandomForest predicting the FINE attack label (CICIDS2017's
+own vocabulary, cleaned — data.FINE_LABEL_TO_CATEGORY; coarse categories are
+derived from it, not trained), plus an explicit BENIGN_CATEGORY ("Benign") option so it can push back on the binary
 model's false positives instead of always guessing an attack — see
 docs/design-decisions.md for why. Saves to
 classifier.DEFAULT_CATEGORY_MODEL_PATH.
@@ -31,30 +32,21 @@ from src.detection.training import data
 DEFAULT_BENIGN_TO_ATTACK_RATIO = 2.0
 
 
-def _label_to_category(raw_label):
-    """Same as data.map_cicids_label_to_category, but BENIGN maps to
-    classifier.BENIGN_CATEGORY instead of None (see module docstring)."""
-    category = data.map_cicids_label_to_category(raw_label)
-    if category is not None:
-        return category
-    if isinstance(raw_label, str) and raw_label.strip().lower() == "benign":
-        return classifier.BENIGN_CATEGORY
-    return None
-
-
 def build_category_training_set(
     df, feature_names, *, include_benign: bool = False,
     benign_to_attack_ratio: float = None, random_state: int = 42,
 ):
-    """Anomalous rows only, or (include_benign=True) anomalous rows plus
+    """Fine-label rows: anomalous only, or (include_benign=True) plus
     BENIGN_CATEGORY rows, optionally downsampled to benign_to_attack_ratio
     times the attack count (deterministic, via random_state). Pass no ratio
-    to keep every benign row at its real count (as for TEST)."""
-    label_fn = _label_to_category if include_benign else data.map_cicids_label_to_category
-    categories = df[data.LABEL_COL].map(label_fn)
-    mask = categories.notna()
+    to keep every benign row at its real count (as for TEST). Unrecognized
+    labels are always dropped."""
+    labels = df[data.LABEL_COL].map(data.map_cicids_label_to_fine)
+    if not include_benign:
+        labels = labels.where(labels != classifier.BENIGN_CATEGORY)
+    mask = labels.notna()
     frame = df.loc[mask]
-    y = categories[mask]
+    y = labels[mask]
 
     if include_benign and benign_to_attack_ratio is not None:
         is_benign = y == classifier.BENIGN_CATEGORY
@@ -102,7 +94,7 @@ def train_category_model(X, y, random_state: int = 42) -> RandomForestClassifier
 
 def _print_row_counts(label: str, y) -> None:
     counts = dict(sorted(Counter(y).items()))
-    print(f"{label}: {len(y)} rows across {len(counts)} categories: {counts}")
+    print(f"{label}: {len(y)} rows across {len(counts)} labels: {counts}")
 
 
 def main():
@@ -123,9 +115,9 @@ def main():
     model = train_category_model(X_train, y_train)
 
     y_pred = model.predict(X_test)
-    print(classification_report(y_test, y_pred))
+    print(classification_report(y_test, y_pred, digits=4))  # per fine label: precision/recall/F1/support
     macro_f1 = f1_score(y_test, y_pred, average="macro")
-    print(f"Macro F1: {macro_f1:.4f}")
+    print(f"Macro F1 (fine labels): {macro_f1:.4f}")
 
     os.makedirs(os.path.dirname(classifier.DEFAULT_CATEGORY_MODEL_PATH), exist_ok=True)
     joblib.dump(
