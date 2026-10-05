@@ -22,14 +22,25 @@ conclusion. Full contract details: [docs/architecture.md](docs/architecture.md).
 For every event, `DetectionResult.detector_notes` is one of:
 
 - **`None`** — the event was not anomalous (benign). No note is produced.
-- **`"[category=X] [label=Y] <explanation>"`** — the event was anomalous.
+- **`"[category=X] [label=Y] <summary> <explanation>"`** — the event was anomalous.
   `X` and `Y` are always present and always code-decided (never an LLM
   output). `X` is the coarse category: `DoS`, `DDoS`, `PortScan`,
   `BruteForce`, `WebAttack`, `Botnet`, `Infiltration`, `Heartbleed`, or
   `"Unknown"`. `Y` is the fine CICIDS2017 label (`DoS Hulk`, `FTP-Patator`,
   `Web Attack - XSS`, ...) or `"Unknown"`. `<explanation>` is either an
   LLM-generated explanation (when `use_llm=True` and it succeeds) or a fixed
-  template sentence.
+  template sentence. `<summary>` is a code-built, plain-English sentence about
+  this single flow (destination port + service name, duration, packet and
+  SYN/FIN/RST counts, each with its above/below/near-training-median
+  direction; features missing from the event are left out, and the whole
+  summary is omitted if none are present). It says nothing about other
+  connections or source hosts. The tags always come first, so
+  `src/shared/tags.parse_category` finds the category and
+  `strip_category_tag` leaves `[label=Y] <summary> ...` for text search.
+  When the schema has them, `DetectionResult.attack_label`,
+  `attack_category`, `category_confidence` and `traffic_summary` are also
+  populated (checked with `hasattr`, so it works before and after the schema
+  change).
 
 **Decision rule** (threshold `CATEGORY_CONFIDENCE_THRESHOLD`, default 0.80;
 a group's probability is the sum of its fine labels'):
@@ -57,6 +68,40 @@ as a `model_disagreement` boolean column. See
 [docs/architecture.md](docs/architecture.md#category-decision-a-deterministic-tool-not-the-llm)
 for the full decision logic, and
 [docs/design-decisions.md](docs/design-decisions.md) for why it exists.
+
+## Recheck (for the Judge)
+
+`DetectionManager.run(event, recheck_reason=None)` and
+`DetectionSubagent.run(event, recheck_reason=None)`. The default call is
+unchanged. With a `recheck_reason`, `is_anomalous` and `confidence` are
+**identical to a normal run** — a recheck only returns more evidence:
+
+- notes gain `Recheck evidence: Top labels: ... Groups: ... Tree votes:
+  fraction=..., std=...` (the Judge's reason is deliberately NOT in the notes —
+  Correlation embeds the notes text and the reason would bias it; top-3 fine labels and coarse groups with
+  probabilities; the tree vote spread is inspected even when the call is not
+  borderline);
+- the summary gains the 10 most unusual features for this flow;
+- with `use_llm=True`, the LLM explanation is always attempted (even with
+  the circuit breaker open) and the reason is in its prompt;
+- a `recheck` trace step (and the LLM prompt) hold the reason — never the notes. The reason is cleaned to one
+  short bracket-free line (≤ 300 chars) so it cannot forge a `[category=...]`
+  tag.
+
+A recheck of a non-anomalous event returns the same decision with notes
+`Recheck evidence: Tree votes: ...` and no category tag.
+
+Example `detector_notes` (real DoS Hulk test flow, no LLM) — normal:
+
+```
+[category=DoS] [label=DoS Hulk] Single flow to destination port 80 (HTTP): duration 85.00 s (above the training median), forward packets 7 (above the training median), backward packets 7 (above the training median), SYN flags 0 (near the training median), FIN flags 1 (above the training median), RST flags 0 (near the training median).
+```
+
+and with `recheck_reason="Mitigation disagrees: playbook suggests port-scan response"` (the reason itself is not in the notes; microsecond features are shown in seconds/ms):
+
+```
+[category=DoS] [label=DoS Hulk] Single flow to destination port 80 (HTTP): duration 85.00 s (above the training median), …, RST flags 0 (near the training median), most unusual features: Idle Min 84.80 s (above the training median), Fwd IAT Std 34.60 s (above the training median), … Active Max 12.0 ms (above the training median), … Fwd Packet Length Std 153.102 (above the training median). Recheck evidence: Top labels: DoS Hulk 1.00, Benign 0.00, Bot 0.00. Groups: DoS 1.00, Benign 0.00, Botnet 0.00. Tree votes: fraction=1.00, std=0.00.
+```
 
 ## Quick start
 

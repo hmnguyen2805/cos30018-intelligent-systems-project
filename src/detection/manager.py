@@ -1,7 +1,7 @@
 """
 Detection Manager — owns the top-level Detection contract:
 
-    DetectionManager.run(event: TrafficEvent) -> DetectionResult
+    DetectionManager.run(event: TrafficEvent, recheck_reason: Optional[str] = None) -> DetectionResult
 
 Delegates the actual classification work to DetectionSubagent. Also the
 place for any future manager-level oversight (e.g. deciding whether to
@@ -53,8 +53,12 @@ class DetectionManager(BaseAgent):
         per-event timeout. Never raises; no-op success when use_llm is False."""
         return self._subagent.warmup()
 
-    def run(self, input_data: TrafficEvent) -> DetectionResult:
-        """Delegate to DetectionSubagent and return its result."""
+    def run(self, input_data: TrafficEvent, recheck_reason: Optional[str] = None) -> DetectionResult:
+        """Delegate to DetectionSubagent and return its result. A Judge
+        recheck_reason asks for more evidence (never a different decision) —
+        see DetectionSubagent.run."""
         self._trace = []
         self.log_step(thought="Delegate to Detection Subagent.", action="delegate_to_subagent")
-        return self._subagent.run(input_data)
+        if recheck_reason is None:
+            return self._subagent.run(input_data)  # default call: unchanged
+        return self._subagent.run(input_data, recheck_reason=recheck_reason)

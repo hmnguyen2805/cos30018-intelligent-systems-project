@@ -100,7 +100,7 @@ TrafficEvent
                               passes                 fails / times out / errors
                                  |                          |
                                  v                          v
-                      "[category=X] [label=Y] explanation"   template note, "[category=X] [label=Y] ..."
+                      "[category=X] [label=Y] <summary> explanation"   template note, same prefix
                       (X, Y = code's chosen category/label   (same X, Y either way;
                       either way)                    + counts toward the circuit breaker)
 ```
@@ -227,6 +227,44 @@ event, whether or not `use_llm` is set):
    report both the thresholded decision and the raw top-1.
 5. No category model loaded (backward compatibility) → logged as
    `category_model_unavailable`, label and category are both `"Unknown"`.
+
+## Notes format, traffic summary and recheck
+
+`detector_notes` for an anomalous event is
+`[category=X] [label=Y] <summary> [<recheck evidence>] [<LLM explanation or
+template note>] [<borderline note>]`, assembled by `subagent._compose_notes`
+— tags first, so `src/shared/tags.parse_category` keeps working and
+`strip_category_tag` leaves `[label=Y] <summary> ...` for Correlation's text
+search.
+
+`<summary>` is `classifier.describe_flow`: one deterministic sentence from the
+context features present in the event (Destination Port with a service name
+for common ports, Flow Duration, Total Fwd/Backward Packets, SYN/FIN/RST
+counts) and the code-computed above/below/near-median direction from the
+binary artifact's medians/MAD. Missing features are skipped; with none
+present there is no summary. It describes one flow only — no claims about
+other connections or source IPs. No LLM is involved.
+
+`DetectionResult.attack_label`, `attack_category`, `category_confidence` (the
+top group's probability) and `traffic_summary` are set only if the dataclass
+has those fields (`hasattr`), so Detection works before and after the schema
+change.
+
+**Recheck (Judge).** `DetectionManager.run(event, recheck_reason=None)` /
+`DetectionSubagent.run(event, recheck_reason=None)`. The default call is
+byte-for-byte unchanged (the manager only forwards the argument when set).
+`is_anomalous`/`confidence` come from the same code path as a normal run —
+the extra tree-vote inspection on a non-borderline event is evidence only —
+so a recheck can never flip a decision. It adds: a `recheck` trace step with
+the reason (the reason is NOT written into the notes: Correlation embeds the
+notes text, so it would bias its technique search; the notes only get a neutral
+`Recheck evidence:` prefix); top-3 fine labels and coarse groups with probabilities and the
+tree vote spread in the notes; `top_features` k=10 appended to the summary (microsecond features — Flow
+Duration, `*IAT*`, `Active*`, `Idle*` — shown with units, not raw µs);
+and, with `use_llm=True`, a forced LLM explanation (the circuit breaker is
+bypassed; `LLMExplanationLayer.explain(..., recheck_reason=)` puts the reason
+in the prompt). The reason is cleaned to a single bracket-free line of at
+most 300 characters before it reaches the trace or the prompt.
 
 **Contract with downstream agents.** `[category=X]` is unchanged in meaning
 and vocabulary (`DoS`, `DDoS`, `PortScan`, `BruteForce`, `WebAttack`,

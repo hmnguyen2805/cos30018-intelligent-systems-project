@@ -31,6 +31,8 @@ DISAGREEMENT_THRESHOLD = 0.15  # tree-vote std above this = low ensemble consens
 # Default chosen by the threshold sweep — see docs/evaluation.md.
 DEFAULT_CATEGORY_CONFIDENCE_THRESHOLD = 0.8
 CATEGORY_TOP_K = 3
+RECHECK_TOP_FEATURES = 10
+MAX_RECHECK_REASON_CHARS = 300
 
 
 def decide_category(top_label, top_label_p, top_category, top_category_p, threshold):
@@ -103,12 +105,27 @@ class DetectionSubagent(BaseAgent):
             return {"ok": True, "elapsed_seconds": 0.0, "reason": None}
         return self._llm.warmup()
 
-    def run(self, input_data: TrafficEvent) -> DetectionResult:
+    def run(self, input_data: TrafficEvent, recheck_reason: Optional[str] = None) -> DetectionResult:
         """Classify one event: is_anomalous/confidence come from
-        classifier.py only; category and (if enabled) the LLM explanation
-        only ever affect detector_notes."""
+        classifier.py only; category, the traffic summary and (if enabled)
+        the LLM explanation only ever affect detector_notes.
+
+        recheck_reason (set by the Judge) asks for MORE EVIDENCE, never a
+        different decision: is_anomalous/confidence are computed exactly as
+        in a normal run. A recheck additionally inspects the tree votes even
+        when not borderline, adds the top-3 labels/groups and a top-10
+        feature summary to the notes, forces the LLM explanation (reason in
+        its prompt) and logs a "recheck" trace step."""
         event = input_data
+        recheck_reason = _clean_reason(recheck_reason) if recheck_reason is not None else None
+        recheck = recheck_reason is not None
         self._trace = []  # fresh trace per event
+        if recheck:
+            self.log_step(
+                thought="Judge requested a recheck — gathering extra evidence; the decision itself "
+                        "is computed exactly as in a normal run.",
+                action="recheck", tool_input={"reason": recheck_reason},
+            )
 
         p_anomalous = classifier.predict_proba_anomalous(self._artifact, event.features)
         self.log_step(
@@ -120,17 +137,21 @@ class DetectionSubagent(BaseAgent):
 
         final_p = p_anomalous
         notes = None
-        vote_std = None
+        vote_frac = vote_std = None
+        borderline = BORDERLINE_LOW <= p_anomalous <= BORDERLINE_HIGH
 
-        if BORDERLINE_LOW <= p_anomalous <= BORDERLINE_HIGH:
+        if borderline or recheck:
             vote_frac, vote_std = classifier.tree_vote_spread(self._artifact, event.features)
             self.log_step(
-                thought=f"Confidence borderline (p={p_anomalous:.3f}). Re-examine via per-tree "
-                        "vote spread before deciding.",
+                thought=(f"Confidence borderline (p={p_anomalous:.3f}). Re-examine via per-tree "
+                         "vote spread before deciding.") if borderline else
+                        "Recheck: inspect per-tree vote spread as evidence only (not borderline, "
+                        "so it does not affect the decision).",
                 action="inspect_tree_votes",
                 tool_input={"n_features": len(event.features)},
                 observation=f"tree_vote_frac={vote_frac:.3f}, tree_vote_std={vote_std:.3f}",
             )
+        if borderline:
             final_p = vote_frac
             if vote_std >= DISAGREEMENT_THRESHOLD:
                 notes = (
@@ -144,16 +165,24 @@ class DetectionSubagent(BaseAgent):
         is_anomalous = final_p >= 0.5
         confidence = final_p if is_anomalous else 1.0 - final_p
 
-        chosen_label = chosen_category = category_probability = None
+        chosen_label = chosen_category = category_probability = ranked = summary = None
         if is_anomalous:
-            chosen_label, chosen_category, category_probability = self._choose_category(event)
-
-        if is_anomalous and self.use_llm:
-            notes = self._apply_llm_layer(
-                event, p_anomalous, vote_std, notes, chosen_label, chosen_category, category_probability,
+            chosen_label, chosen_category, category_probability, ranked = self._choose_category(event)
+            summary = classifier.describe_flow(
+                self._artifact, event.features, top_k=RECHECK_TOP_FEATURES if recheck else 0,
             )
-        elif chosen_category is not None:
-            notes = self._tag_with_category(chosen_category, chosen_label, notes)
+        evidence = _recheck_evidence(ranked, vote_frac, vote_std) if recheck else None
+
+        if is_anomalous:
+            explanation = (
+                self._llm_explanation(
+                    event, p_anomalous, vote_std, borderline, chosen_category, category_probability,
+                    recheck_reason,
+                ) if self.use_llm else None
+            )
+            notes = _compose_notes(chosen_category, chosen_label, [summary, evidence, explanation, notes])
+        elif evidence:
+            notes = evidence
 
         self.log_step(
             thought="Finalize decision.",
@@ -168,25 +197,28 @@ class DetectionSubagent(BaseAgent):
             detector_notes=notes,
             trace=self.get_trace(),
         )
-        # shared/schemas.py may not have these fields (yet); the notes tags carry them either way.
-        if hasattr(result, "attack_category"):
-            result.attack_category = chosen_category
-        if hasattr(result, "attack_label"):
-            result.attack_label = chosen_label
+        # shared/schemas.py may not have these fields (yet); the notes carry them either way.
+        for field_name, value in (
+            ("attack_category", chosen_category), ("attack_label", chosen_label),
+            ("category_confidence", category_probability), ("traffic_summary", summary),
+        ):
+            if hasattr(result, field_name):
+                setattr(result, field_name, value)
         return result
 
-    def _choose_category(self, event: TrafficEvent) -> Tuple[str, str, Optional[float]]:
+    def _choose_category(self, event: TrafficEvent) -> Tuple[str, str, Optional[float], Optional[dict]]:
         """Deterministically choose the fine attack label and its coarse
         category (never the LLM) via decide_category. Returns (label,
-        category, top_category_probability) — the probability is returned
-        even when the result is "Unknown", so callers can compare against
-        the raw top-1 group. See docs/architecture.md (category decision)."""
+        category, top_category_probability, ranked) — the probability is
+        returned even when the result is "Unknown", so callers can compare
+        against the raw top-1 group; ranked is the model's top-3 labels +
+        group probabilities (None without a category model). See docs/architecture.md (category decision)."""
         if self._category_artifact is None:
             self.log_step(
                 thought="No category model loaded — reporting label and category as Unknown.",
                 action="category_model_unavailable",
             )
-            return "Unknown", "Unknown", None
+            return "Unknown", "Unknown", None, None
 
         ranked = classifier.predict_attack_category(self._category_artifact, event.features, top_k=CATEGORY_TOP_K)
         top_label, top_label_p = ranked["labels"][0]["label"], ranked["labels"][0]["probability"]
@@ -218,25 +250,44 @@ class DetectionSubagent(BaseAgent):
                         f"category={category}.",
                 action="category_decision", tool_input=tool_input, observation=f"top={ranked}",
             )
-        return label, category, top_category_p
+        return label, category, top_category_p, ranked
 
-    @staticmethod
-    def _tag_with_category(category: str, label: str, base_notes: Optional[str]) -> str:
-        tag = f"[category={category}] [label={label}]"
-        return f"{tag} {base_notes}" if base_notes else tag
-
-    def _apply_llm_layer(
-        self, event: TrafficEvent, p_anomalous: float, vote_std: Optional[float],
-        deterministic_notes: Optional[str], chosen_label: str, chosen_category: str,
-        category_probability: Optional[float],
+    def _llm_explanation(
+        self, event: TrafficEvent, p_anomalous: float, vote_std: Optional[float], borderline: bool,
+        chosen_category: str, category_probability: Optional[float], recheck_reason: Optional[str],
     ) -> str:
-        """Return detector_notes after attempting the LLM layer:
-        "[category=X] [label=Y] explanation", both always the pre-decided values.
-        Never raises — explain() falls back to a template note on failure."""
-        llm_result = self._llm.explain(event, p_anomalous, vote_std, chosen_category, category_probability)
-        explanation = llm_result["explanation"] if llm_result is not None else build_template_note(vote_std)
+        """The LLM's explanation of the already-decided category, or the
+        template note when the layer is skipped/invalid/failed. Never raises
+        (explain() falls back)."""
+        llm_result = self._llm.explain(
+            event, p_anomalous, vote_std, chosen_category, category_probability, recheck_reason=recheck_reason,
+        )
+        if llm_result is not None:
+            return llm_result["explanation"]
+        return build_template_note(vote_std if borderline else None)
 
-        tag = self._tag_with_category(chosen_category, chosen_label, explanation)
-        if deterministic_notes:
-            return f"{tag} {deterministic_notes}"
-        return tag
+
+def _clean_reason(reason: str) -> str:
+    """One short bracket-free line, safe to embed in notes and prompts."""
+    return " ".join(str(reason).replace("[", "(").replace("]", ")").split())[:MAX_RECHECK_REASON_CHARS]
+
+
+def _compose_notes(category: str, label: str, parts: list) -> str:
+    """"[category=X] [label=Y] <summary> <evidence> <explanation> ..." — the
+    tags always come first (src/shared/tags.py parses the category from them)."""
+    return " ".join([f"[category={category}] [label={label}]", *(p for p in parts if p)])
+
+
+def _recheck_evidence(ranked: Optional[dict], vote_frac: Optional[float], vote_std: Optional[float]) -> str:
+    """Notes text for a recheck: the extra evidence gathered. The Judge's
+    reason is deliberately NOT included — Correlation embeds the notes text,
+    and the reason would bias its technique search. It lives only in the
+    "recheck" trace step and the LLM prompt."""
+    pieces = ["Recheck evidence:"]
+    if ranked:
+        pieces.append("Top labels: " + ", ".join(f"{e['label']} {e['probability']:.2f}" for e in ranked["labels"]) + ".")
+        pieces.append("Groups: " + ", ".join(
+            f"{e['category']} {e['probability']:.2f}" for e in ranked["categories"][:CATEGORY_TOP_K]) + ".")
+    if vote_frac is not None:
+        pieces.append(f"Tree votes: fraction={vote_frac:.2f}, std={vote_std:.2f}.")
+    return " ".join(pieces)
