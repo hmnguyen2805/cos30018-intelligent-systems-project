@@ -145,3 +145,12 @@ def test_class_weights_falls_back_to_plain_balanced_with_no_benign_rows():
     weights = train_category._class_weights(y)
     assert weights["Infiltration"] > weights["DDoS"]
     assert classifier.BENIGN_CATEGORY not in weights
+
+
+def test_build_category_training_set_keeps_fine_labels_and_normalises_web_attack():
+    df = pd.DataFrame({
+        "Label": ["DoS Hulk", "DoS slowloris", "Web Attack � XSS", "Heartbleed", "BENIGN"],
+        "x": [1.0, 2.0, 3.0, 4.0, 5.0],
+    })
+    _, y = train_category.build_category_training_set(df, FEATURE_NAMES, include_benign=True)
+    assert sorted(y) == ["Benign", "DoS Hulk", "DoS slowloris", "Heartbleed", "Web Attack - XSS"]

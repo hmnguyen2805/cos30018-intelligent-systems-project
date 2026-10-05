@@ -58,59 +58,66 @@ def test_compute_binary_metrics_roc_auc_is_none_with_a_single_class():
     assert report["roc_auc"] is None
 
 
-# --- batch_predict_category ----------------------------------------------------
+# --- batch_predict_category (three-way rule, vectorized) -------------------------
 
-CATEGORY_CLASSES = [classifier.BENIGN_CATEGORY, "DDoS", "PortScan"]
-
-
-def test_batch_predict_category_picks_the_argmax_class():
-    artifact = _fake_category_artifact(CATEGORY_CLASSES, [
-        [0.1, 0.8, 0.1],  # DDoS
-        [0.1, 0.2, 0.7],  # PortScan
-    ])
-    chosen, raw_top, raw_prob, disagreement = offline_eval.batch_predict_category(
-        artifact, np.zeros((2, 1)), threshold=0.6,
-    )
-    assert list(raw_top) == ["DDoS", "PortScan"]
-    assert list(raw_prob) == pytest.approx([0.8, 0.7])
-    assert list(chosen) == ["DDoS", "PortScan"]
-    assert list(disagreement) == [False, False]
+CATEGORY_CLASSES = [classifier.BENIGN_CATEGORY, "DDoS", "DoS Hulk", "DoS slowloris", "PortScan"]
 
 
-def test_batch_predict_category_below_threshold_becomes_unknown():
-    artifact = _fake_category_artifact(CATEGORY_CLASSES, [[0.1, 0.55, 0.35]])  # top=DDoS @ 0.55
-    chosen, raw_top, raw_prob, disagreement = offline_eval.batch_predict_category(
-        artifact, np.zeros((1, 1)), threshold=0.6,
-    )
-    assert raw_top[0] == "DDoS"
-    assert chosen[0] == "Unknown"
-    assert disagreement[0] == False  # noqa: E712 - numpy bool, not a template-Y bool
+def _decide(rows, threshold):
+    artifact = _fake_category_artifact(CATEGORY_CLASSES, rows)
+    return offline_eval.batch_predict_category(artifact, np.zeros((len(rows), 1)), threshold)
+
+
+def test_batch_predict_category_fine_label_over_threshold_gives_label_and_group():
+    d = _decide([[0.05, 0.0, 0.9, 0.0, 0.05], [0.1, 0.8, 0.0, 0.0, 0.1]], threshold=0.6)
+    assert list(d["label"]) == ["DoS Hulk", "DDoS"]
+    assert list(d["category"]) == ["DoS", "DDoS"]
+    assert list(d["raw_label"]) == ["DoS Hulk", "DDoS"]
+    assert list(d["disagreement"]) == [False, False]
+
+
+def test_batch_predict_category_split_subtypes_give_unknown_label_but_known_group():
+    d = _decide([[0.05, 0.0, 0.5, 0.45, 0.0]], threshold=0.9)  # DoS group = 0.95, best sub-type 0.5
+    assert d["label"][0] == "Unknown"
+    assert d["category"][0] == "DoS"
+    assert d["raw_label"][0] == "DoS Hulk"
+    assert d["raw_category"][0] == "DoS"
+
+
+def test_batch_predict_category_neither_level_clears_threshold_is_unknown_unknown():
+    d = _decide([[0.1, 0.55, 0.0, 0.0, 0.35]], threshold=0.6)
+    assert d["label"][0] == "Unknown" and d["category"][0] == "Unknown"
+    assert d["disagreement"][0] == False  # noqa: E712 - numpy bool
 
 
 def test_batch_predict_category_at_exactly_the_threshold_is_accepted():
-    artifact = _fake_category_artifact(CATEGORY_CLASSES, [[0.1, 0.6, 0.3]])
-    chosen, _, _, _ = offline_eval.batch_predict_category(artifact, np.zeros((1, 1)), threshold=0.6)
-    assert chosen[0] == "DDoS"
+    d = _decide([[0.1, 0.6, 0.0, 0.0, 0.3]], threshold=0.6)
+    assert d["label"][0] == "DDoS"
 
 
 def test_batch_predict_category_benign_top_vote_is_always_unknown_and_flagged():
-    # High confidence Benign vote — must be "Unknown", not "Benign", regardless of threshold.
-    artifact = _fake_category_artifact(CATEGORY_CLASSES, [[0.99, 0.005, 0.005]])
-    chosen, raw_top, raw_prob, disagreement = offline_eval.batch_predict_category(
-        artifact, np.zeros((1, 1)), threshold=0.1,  # low threshold: would otherwise accept 0.99
-    )
-    assert raw_top[0] == classifier.BENIGN_CATEGORY
-    assert raw_prob[0] == pytest.approx(0.99)
-    assert chosen[0] == "Unknown"
-    assert disagreement[0] == True  # noqa: E712
+    d = _decide([[0.99, 0.0, 0.0, 0.0, 0.01]], threshold=0.1)  # low threshold would accept 0.99
+    assert d["raw_label"][0] == classifier.BENIGN_CATEGORY
+    assert d["label"][0] == "Unknown" and d["category"][0] == "Unknown"
+    assert d["disagreement"][0] == True  # noqa: E712
 
 
-# --- is_heartbleed_label / scored_attack_mask ----------------------------------
+def test_batch_predict_category_agrees_with_the_subagent_decision_rule():
+    from src.detection.subagent import decide_category
+    rows = [[0.05, 0.0, 0.5, 0.45, 0.0], [0.1, 0.55, 0.0, 0.0, 0.35], [0.99, 0.0, 0.0, 0.0, 0.01],
+            [0.0, 0.0, 0.95, 0.0, 0.05], [0.3, 0.0, 0.25, 0.25, 0.2]]
+    for threshold in (0.5, 0.9):
+        d = _decide(rows, threshold)
+        for i, row in enumerate(rows):
+            fine = dict(zip(CATEGORY_CLASSES, row))
+            top_label = max(fine, key=fine.get)
+            coarse = classifier.coarse_probabilities(fine)
+            top_cat = max(coarse, key=coarse.get)
+            expected = decide_category(top_label, fine[top_label], top_cat, coarse[top_cat], threshold)
+            assert (d["label"][i], d["category"][i], bool(d["disagreement"][i])) == expected
 
-def test_is_heartbleed_label_matches_case_insensitively():
-    raw = np.array(["Heartbleed", "heartbleed", "DDoS", "BENIGN"], dtype=object)
-    assert list(offline_eval.is_heartbleed_label(raw)) == [True, True, False, False]
 
+# --- scored_attack_mask ----------------------------------------------------------
 
 def test_scored_attack_mask_excludes_benign_false_negatives_and_unknown_true_category():
     true_label = np.array([1, 1, 1, 0])
@@ -120,13 +127,6 @@ def test_scored_attack_mask_excludes_benign_false_negatives_and_unknown_true_cat
     assert list(mask) == [True, False, False, False]
 
 
-def test_scored_attack_mask_excludes_heartbleed_when_given():
-    true_label = np.array([1, 1])
-    binary_pred = np.array([1, 1])
-    true_category = np.array(["DDoS", "Unknown"], dtype=object)  # index 1: Heartbleed's mapped category
-    is_heartbleed = np.array([False, True])
-    mask = offline_eval.scored_attack_mask(true_label, binary_pred, true_category, is_heartbleed)
-    assert list(mask) == [True, False]
 
 
 # --- compute_offline_category_report -------------------------------------------
@@ -276,26 +276,49 @@ def test_model_disagreement_count_only_counts_binary_anomalous_rows():
 
 def test_sweep_category_thresholds_returns_one_row_per_threshold():
     artifact = _fake_category_artifact(CATEGORY_CLASSES, [
-        [0.05, 0.75, 0.20],  # DDoS @ 0.75, true=DDoS, binary caught it
-        [0.05, 0.20, 0.75],  # PortScan @ 0.75, true=None (benign, false positive)
+        [0.05, 0.75, 0.0, 0.0, 0.20],  # DDoS @ 0.75, true=DDoS, binary caught it
+        [0.05, 0.20, 0.0, 0.0, 0.75],  # PortScan @ 0.75, true=None (benign, false positive)
     ])
+    true_fine = np.array(["DDoS", None], dtype=object)
     true_category = np.array(["DDoS", None], dtype=object)
     binary_pred = np.array([1, 1])
     true_label = np.array([1, 0])
 
     rows = offline_eval.sweep_category_thresholds(
-        artifact, np.zeros((2, 1)), true_category, binary_pred, true_label, thresholds=(0.5, 0.8),
+        artifact, np.zeros((2, 1)), true_fine, true_category, binary_pred, true_label, thresholds=(0.5, 0.8),
     )
 
     assert [r["threshold"] for r in rows] == [0.5, 0.8]
     # threshold=0.5: both top votes (0.75) clear it -> the true attack scores correct,
     # and the benign false positive still gets a specific category (PortScan).
     assert rows[0]["category_accuracy"] == pytest.approx(1.0)
+    assert rows[0]["label_accuracy"] == pytest.approx(1.0)
     assert rows[0]["fp_categorisation_rate"] == pytest.approx(100.0)
     # threshold=0.8: neither 0.75 vote clears it -> both become Unknown.
     assert rows[1]["category_accuracy"] == pytest.approx(0.0)
     assert rows[1]["pct_unknown"] == pytest.approx(100.0)
+    assert rows[1]["pct_label_unknown"] == pytest.approx(100.0)
     assert rows[1]["fp_categorisation_rate"] == pytest.approx(0.0)
+
+
+def test_report_flags_classes_below_min_support_as_too_small():
+    n_big = offline_eval.MIN_EVAL_SUPPORT
+    true = np.array(["DDoS"] * n_big + ["Heartbleed"] * 2, dtype=object)
+    mask = np.ones(len(true), dtype=bool)
+    report = offline_eval.compute_offline_category_report(true, true.copy(), true.copy(), mask, mask)
+    assert report["too_small"] == ["Heartbleed"]
+    assert report["macro_f1"] == pytest.approx(1.0)
+    assert report["macro_f1_evaluable"] == pytest.approx(1.0)
+
+
+def test_macro_f1_evaluable_ignores_too_small_classes():
+    n_big = offline_eval.MIN_EVAL_SUPPORT
+    true = np.array(["DDoS"] * n_big + ["Heartbleed"] * 2, dtype=object)
+    chosen = np.array(["DDoS"] * n_big + ["Unknown"] * 2, dtype=object)  # Heartbleed all missed
+    mask = np.ones(len(true), dtype=bool)
+    report = offline_eval.compute_offline_category_report(true, chosen, chosen, mask, mask)
+    assert report["macro_f1_evaluable"] == pytest.approx(1.0)
+    assert report["macro_f1"] < 1.0
 
 
 # --- recommend_category_threshold: HIGHEST threshold clearing min_accuracy --

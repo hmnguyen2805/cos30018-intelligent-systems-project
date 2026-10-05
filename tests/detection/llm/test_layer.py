@@ -47,7 +47,7 @@ def test_use_llm_false_is_unaffected_even_if_llm_would_be_called(
     assert result.confidence == 0.95
     # Category is computed/tagged for every truly-anomalous event regardless of use_llm; no
     # category model is loaded here, so it falls back to "Unknown".
-    assert result.detector_notes == "[category=Unknown]"
+    assert result.detector_notes == "[category=Unknown] [label=Unknown]"
 
 
 @patch("src.detection.llm.layer.LLMExplanationLayer._call_llm_agent")
@@ -91,7 +91,7 @@ def test_llm_invalid_json_falls_back_to_template_note(mock_predict, mock_call_ll
 
     assert result.is_anomalous is True
     assert result.confidence == 0.95
-    assert result.detector_notes == "[category=Unknown] Anomalous event — LLM explanation unavailable."
+    assert result.detector_notes == "[category=Unknown] [label=Unknown] Anomalous event — LLM explanation unavailable."
 
 
 @patch("src.detection.classifier.top_features", return_value=[{"name": "duration"}, {"name": "packet_count"}])

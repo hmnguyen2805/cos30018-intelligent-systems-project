@@ -9,7 +9,9 @@ single_shot, salvage) for the rest.
 """
 from unittest.mock import MagicMock, patch
 
-from src.detection.subagent import DetectionSubagent
+import pytest
+
+from src.detection.subagent import DetectionSubagent, decide_category
 from tests.detection.conftest import make_agent, make_event
 
 
@@ -111,7 +113,7 @@ def test_choose_category_uses_top_class_when_above_threshold(mock_predict):
 
     result = agent.run(make_event())
 
-    assert result.detector_notes == "[category=DDoS]"
+    assert result.detector_notes == "[category=DDoS] [label=DDoS]"
 
 
 @patch("src.detection.classifier.predict_proba_anomalous")
@@ -123,7 +125,7 @@ def test_choose_category_falls_back_to_unknown_below_threshold(mock_predict):
 
     result = agent.run(make_event())
 
-    assert result.detector_notes == "[category=Unknown]"
+    assert result.detector_notes == "[category=Unknown] [label=Unknown]"
 
 
 @patch("src.detection.classifier.predict_proba_anomalous")
@@ -135,7 +137,7 @@ def test_choose_category_threshold_is_configurable(mock_predict):
 
     result = agent.run(make_event())
 
-    assert result.detector_notes == "[category=DDoS]"  # 0.55 clears a lowered 0.5 threshold
+    assert result.detector_notes == "[category=DDoS] [label=DDoS]"  # 0.55 clears a lowered 0.5 threshold
 
 
 @patch("src.detection.classifier.predict_proba_anomalous")
@@ -147,7 +149,7 @@ def test_choose_category_at_exactly_the_threshold_is_accepted(mock_predict):
 
     result = agent.run(make_event())
 
-    assert result.detector_notes == "[category=DDoS]"
+    assert result.detector_notes == "[category=DDoS] [label=DDoS]"
 
 
 @patch("src.detection.classifier.predict_proba_anomalous")
@@ -172,9 +174,9 @@ def test_category_decision_trace_step_records_chosen_and_raw_top_and_threshold(m
 
     step = next(s for s in result.trace if s.action == "category_decision")
     assert step.tool_input == {
-        "chosen_category": "Unknown",
-        "raw_top_category": "DDoS",
-        "raw_top_probability": 0.55,
+        "chosen_label": "Unknown", "chosen_category": "Unknown",
+        "raw_top_label": "DDoS", "raw_top_label_probability": 0.55,
+        "raw_top_category": "DDoS", "raw_top_probability": 0.55,
         "threshold": 0.6,
     }
 
@@ -207,7 +209,7 @@ def test_choose_category_reports_unknown_when_category_model_votes_benign(mock_p
     result = agent.run(make_event())
 
     assert result.is_anomalous is True
-    assert result.detector_notes == "[category=Unknown]"
+    assert result.detector_notes == "[category=Unknown] [label=Unknown]"
 
 
 @patch("src.detection.classifier.predict_proba_anomalous")
@@ -222,8 +224,10 @@ def test_benign_top_vote_is_logged_as_model_disagreement_not_category_decision(m
     disagreement_steps = [s for s in result.trace if s.action == "model_disagreement"]
     assert len(disagreement_steps) == 1
     assert disagreement_steps[0].tool_input == {
-        "chosen_category": "Unknown", "raw_top_category": "Benign",
-        "raw_top_probability": 0.99, "threshold": 0.6,
+        "chosen_label": "Unknown", "chosen_category": "Unknown",
+        "raw_top_label": "Benign", "raw_top_label_probability": 0.99,
+        "raw_top_category": "Benign", "raw_top_probability": 0.99,
+        "threshold": 0.6,
     }
     assert not any(s.action == "category_decision" for s in result.trace)
 
@@ -240,8 +244,50 @@ def test_benign_top_vote_disagreement_is_reported_even_above_the_confidence_thre
 
     result = agent.run(make_event())
 
-    assert result.detector_notes == "[category=Unknown]"
+    assert result.detector_notes == "[category=Unknown] [label=Unknown]"
     assert any(s.action == "model_disagreement" for s in result.trace)
+
+
+# --- decide_category: the three-way rule --------------------------------------
+
+def test_decide_category_fine_label_clears_threshold_gives_label_and_its_group():
+    assert decide_category("DoS Hulk", 0.95, "DoS", 0.97, 0.9) == ("DoS Hulk", "DoS", False)
+
+
+def test_decide_category_only_the_group_clears_threshold_gives_unknown_label_and_group():
+    # Probability split across DoS sub-types: no single one trusted, the group is.
+    assert decide_category("DoS Hulk", 0.5, "DoS", 0.95, 0.9) == ("Unknown", "DoS", False)
+
+
+def test_decide_category_neither_clears_threshold_gives_unknown_unknown():
+    assert decide_category("DoS Hulk", 0.4, "DoS", 0.6, 0.9) == ("Unknown", "Unknown", False)
+
+
+def test_decide_category_benign_top_fine_label_is_disagreement_whatever_the_threshold():
+    assert decide_category("Benign", 0.99, "Benign", 0.99, 0.1) == ("Unknown", "Unknown", True)
+
+
+def test_decide_category_benign_top_group_is_disagreement():
+    assert decide_category("DoS Hulk", 0.3, "Benign", 0.4, 0.1) == ("Unknown", "Unknown", True)
+
+
+def test_decide_category_threshold_is_inclusive():
+    assert decide_category("DDoS", 0.6, "DDoS", 0.6, 0.6) == ("DDoS", "DDoS", False)
+
+
+@patch("src.detection.classifier.predict_proba_anomalous")
+def test_group_probability_is_the_sum_of_its_fine_labels_in_the_subagent(mock_predict):
+    mock_predict.return_value = 0.95
+    agent = make_agent_with_category_model(
+        [("DoS Hulk", 0.5), ("DoS slowloris", 0.45), ("Benign", 0.05)], category_confidence_threshold=0.9,
+    )
+
+    result = agent.run(make_event())
+
+    assert result.detector_notes == "[category=DoS] [label=Unknown]"
+    step = next(s for s in result.trace if s.action == "category_decision")
+    assert step.tool_input["raw_top_probability"] == pytest.approx(0.95)
+    assert step.tool_input["raw_top_label_probability"] == pytest.approx(0.5)
 
 
 # --- assert_feature_names_match is enforced at construction time -------------

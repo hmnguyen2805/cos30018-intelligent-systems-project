@@ -5,6 +5,7 @@ so no script can accidentally test on a row another model trained on.
 """
 import glob
 import os
+import re
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -16,41 +17,57 @@ LABEL_COL = "Label"
 SPLIT_RANDOM_STATE = 42
 SPLIT_TEST_SIZE = 0.2
 
-# The fixed attack-category vocabulary the category model predicts (train_category.py).
-# "Unknown" covers both a low-confidence decision (subagent.py) and Heartbleed (see below).
-ALLOWED_CATEGORIES = [
-    "DoS", "DDoS", "PortScan", "BruteForce", "WebAttack", "Botnet", "Infiltration", "Unknown",
-]
+BENIGN_LABEL = "Benign"
 
-# CICIDS2017's raw multiclass Label -> our fixed attack category list above. BENIGN (and
-# anything unrecognized) maps to None: "no true attack category to score against". "Web Attack
-# � Brute Force" etc. (the dataset ships this mangled-separator encoding for all three Web
-# Attack subtypes) are matched by prefix, not exact string.
-_CICIDS_LABEL_TO_CATEGORY = {
-    "benign": None,
-    "bot": "Botnet",
-    "ddos": "DDoS",
-    "dos goldeneye": "DoS",
-    "dos hulk": "DoS",
-    "dos slowhttptest": "DoS",
-    "dos slowloris": "DoS",
-    "ftp-patator": "BruteForce",
-    "ssh-patator": "BruteForce",
-    "heartbleed": "Unknown",
-    "infiltration": "Infiltration",
-    "portscan": "PortScan",
+# Fine label (CICIDS2017's own vocabulary, cleaned) -> coarse attack category. The category
+# model predicts the fine labels; coarse categories are always derived from this table, never
+# predicted separately. BENIGN_LABEL maps to None: "no attack category". "Unknown" is not in
+# here: it only ever means a low-confidence decision (subagent.py).
+FINE_LABEL_TO_CATEGORY = {
+    BENIGN_LABEL: None,
+    "Bot": "Botnet",
+    "DDoS": "DDoS",
+    "DoS GoldenEye": "DoS",
+    "DoS Hulk": "DoS",
+    "DoS Slowhttptest": "DoS",
+    "DoS slowloris": "DoS",
+    "FTP-Patator": "BruteForce",
+    "SSH-Patator": "BruteForce",
+    "Heartbleed": "Heartbleed",
+    "Infiltration": "Infiltration",
+    "PortScan": "PortScan",
+    "Web Attack - Brute Force": "WebAttack",
+    "Web Attack - XSS": "WebAttack",
+    "Web Attack - Sql Injection": "WebAttack",
 }
 
+# The fixed coarse vocabulary (plus "Unknown", the low-confidence answer).
+ALLOWED_CATEGORIES = sorted({c for c in FINE_LABEL_TO_CATEGORY.values() if c}) + ["Unknown"]
 
-def map_cicids_label_to_category(raw_label) -> Optional[str]:
-    """Map one CICIDS2017 Label to ALLOWED_CATEGORIES. None for BENIGN and
-    any unrecognized label — both excluded from category scoring/training."""
+_FINE_BY_LOWER = {label.lower(): label for label in FINE_LABEL_TO_CATEGORY}
+# CICIDS2017 ships "Web Attack <mangled separator> Brute Force" etc.; match the prefix and
+# rebuild with a plain " - " separator.
+_WEB_ATTACK = re.compile(r"^web attack[^a-z]+(.+)$")
+
+
+def map_cicids_label_to_fine(raw_label) -> Optional[str]:
+    """Clean fine label for a raw CICIDS2017 Label (BENIGN -> "Benign", Web
+    Attack separator normalised); idempotent on already-clean labels. None
+    for anything unrecognized."""
     if not isinstance(raw_label, str):
         return None
     normalized = raw_label.strip().lower()
-    if normalized.startswith("web attack"):
-        return "WebAttack"
-    return _CICIDS_LABEL_TO_CATEGORY.get(normalized)
+    web = _WEB_ATTACK.match(normalized)
+    if web:
+        normalized = f"web attack - {web.group(1)}"
+    return _FINE_BY_LOWER.get(normalized)
+
+
+def map_cicids_label_to_category(raw_label) -> Optional[str]:
+    """Fine -> coarse: map one CICIDS2017 Label (raw or already-clean fine
+    label) to ALLOWED_CATEGORIES. None for BENIGN and any unrecognized
+    label — both excluded from category scoring/training."""
+    return FINE_LABEL_TO_CATEGORY.get(map_cicids_label_to_fine(raw_label))
 
 
 def load_dataset(dataset_dir: str) -> pd.DataFrame:

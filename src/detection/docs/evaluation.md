@@ -50,10 +50,11 @@ free-tier rate limit over a full run.
 Each sampled event's original CICIDS2017 `Label` (multiclass — e.g. "DoS
 Hulk", "Web Attack – XSS" — normally discarded by `train_binary.py`'s
 BENIGN-vs-anomalous binarization) is kept alongside it and mapped via
-`data.map_cicids_label_to_category` to the same fixed category vocabulary
-`train_category.py`/`_choose_category` use (`Heartbleed` maps to `Unknown`;
-`BENIGN` and anything unrecognized map to `None`). It's written to each CSV
-row as `true_category`.
+`data.map_cicids_label_to_category` to the coarse category vocabulary
+(`Heartbleed` is its own category; `BENIGN` and anything unrecognized map to
+`None`). It's written to each CSV row as `true_category`. This online path
+scores the **coarse** category only (parsed from the `[category=X]` tag); the
+fine-label tables live in `--offline` below.
 
 Since the category decision is a deterministic classifier call (see
 [design-decisions.md](design-decisions.md)) — not an LLM output —
@@ -86,7 +87,9 @@ false positives — genuinely benign traffic it wrongly called anomalous.
 events with `true_label == 0` that the binary model still flagged
 anomalous, what percentage got a specific attack category rather than
 `"Unknown"`. A real full-test-split run (see `--offline` below) shows
-**79.4%** (304/383 false positives). `print_summary` prints it right after
+**59.3%** (227/383 false positives) at the default threshold 0.80 (48.6%,
+186/383, at 0.90 — a lower threshold trusts more borderline calls, on false
+positives too). `print_summary` prints it right after
 the category report, and `evaluate.py`'s CSV carries each row's
 `model_disagreement` flag (True when `_choose_category`'s top vote was
 Benign for that event) — the console summary also prints the total
@@ -102,7 +105,7 @@ script can decide on its own.
 ## Offline evaluation: full-split batch metrics + threshold sweep
 
 ```sh
-python -m src.detection.evaluate --offline [--category-threshold 0.9] [--min-category-accuracy 0.99]
+python -m src.detection.evaluation.evaluate --offline [--category-threshold 0.8] [--min-category-accuracy 0.99]
 ```
 
 A different mode from everything above: no `DetectionManager`/
@@ -115,136 +118,162 @@ event. It reports:
 
 - **binary classifier**: precision/recall/F1/ROC-AUC over the whole test
   split.
-- **category classifier**: per-class precision/recall/F1 (+ row
-  counts/support), at `--category-threshold` (default: the current
-  `CATEGORY_CONFIDENCE_THRESHOLD`) — see "Per-class table" below for exactly
-  what's scored and why.
+- **fine-label classifier**: per-fine-label precision/recall/F1/support (the
+  15 CICIDS2017 labels + Benign), at `--category-threshold` (default: the
+  current `CATEGORY_CONFIDENCE_THRESHOLD`), with fine-level accuracy and
+  coverage.
+- **coarse-category classifier**: the same table for the coarse category the
+  three-way decision picked (`subagent.decide_category`) — including the
+  group-only answer when the fine label is `Unknown`.
+- **web attack confusion**: true vs predicted fine label for the three Web
+  Attack labels (incl. `Unknown`), and how many web-attack flows got a
+  *wrong* specific label at confidence >= threshold.
 - **false-positive categorisation**: count + rate (see above).
 - **model disagreement count**: binary-anomalous events where the category
   model's top vote was Benign.
-- **coverage**: % of true attacks given a specific category (not punted to
-  `Unknown`).
+- **coverage** (at each level): % of true attacks given a non-`Unknown`
+  answer. Coarse coverage >= fine coverage, because the group can clear the
+  threshold when no single sub-type does.
 
-### Per-class table: Heartbleed, Benign, and macro F1 scope
+Any class with support < `offline_eval.MIN_EVAL_SUPPORT` (50) is marked
+**"too small to evaluate"** in the tables, and every macro F1 is printed twice:
+over all attack classes, and excluding those too-small classes.
 
-Two things the per-class table deliberately does NOT do, both found from a
-real `--offline` run:
+### Per-class tables: Benign, Heartbleed, macro F1 scope
 
-1. **It never conflates "Unknown" as a true label with "Unknown" as a
-   low-confidence prediction.** `data.map_cicids_label_to_category` maps
-   CICIDS2017's `Heartbleed` label to the *string* `"Unknown"` — the same
-   string `subagent.py._choose_category` uses for a low-confidence punt or a
-   binary/category model disagreement. A first version of this table scored
-   them as the same class, which silently combined "the model correctly
-   recognized this as Heartbleed" with "the model wasn't sure" into one
-   meaningless row (precision ~0, recall ~1, dragging macro F1 down for no
-   real reason). Fix (`is_heartbleed_label`): **Heartbleed rows are excluded
-   from category scoring entirely** and their count reported separately
-   (printed as `excluded N Heartbleed event(s)...`) — chosen over giving
-   Heartbleed its own category, because the trained category model was
-   never taught to tell the two apart (it's trained on
-   `data.map_cicids_label_to_category`'s output, which conflates them the
-   same way); a real "Heartbleed" class would need retraining, not just a
-   reporting fix. Low-confidence predictions are reported as **coverage** (%
-   of true attacks given a specific category, an `--offline` top-line
-   metric) instead of ever being a class row.
-2. **Per-class PRECISION now includes binary false positives.** The table is
+1. **Heartbleed is its own class.** It used to map to the string `"Unknown"`
+   (the same string a low-confidence punt uses), so it had to be excluded
+   from scoring. It is now a fine label and a coarse category of its own
+   (`Heartbleed`), and the exclusion (`is_heartbleed_label`) is gone. It has
+   only 3 test rows, so it is flagged too small to evaluate.
+2. **Per-class PRECISION includes binary false positives.** The table is
    computed over every *flagged* flow — true attacks the binary model also
    caught, **plus its false positives**, whose true class is
-   `classifier.BENIGN_CATEGORY` ("Benign") — so a benign flow the category
-   model mislabeled "Botnet" now correctly counts against Botnet's
-   precision, which it couldn't before false positives were in the scoring
-   universe at all. `n` (attack count) and `n_table` (attacks + false
-   positives) are both reported. `Benign`'s own row will always read
-   precision=recall=0 — "Benign" is never a possible `chosen_category` value
-   (a Benign top vote is always reported as `"Unknown"`, never `"Benign"`),
-   so it can never itself be "predicted"; its purpose is solely to penalize
-   other classes' precision. **Macro F1 is computed over real attack classes
-   only** — the Benign row is excluded from the average (it would otherwise
-   unfairly drag macro F1 toward 0 for a class that structurally can never
-   be "hit").
+   `classifier.BENIGN_CATEGORY` ("Benign") — so a benign flow mislabeled
+   "Bot" counts against Bot's precision. `n` (attacks) and `n_table`
+   (attacks + false positives) are both reported. `Benign`'s own row always
+   reads precision=recall=0 (a Benign top vote is reported as `"Unknown"`,
+   never `"Benign"`); it only penalises other classes' precision.
+   **Macro F1 averages attack classes only**, never the Benign row.
 
-A real run at the current default (threshold=0.90, excluding 3 Heartbleed
-events):
+Real run on the TEST split, threshold **0.80** (n=84,972 true attacks,
+n_table=85,355):
+
+Fine labels — accuracy 0.9884, raw top-1 0.9955, coverage 98.9%, macro F1
+**0.846** (**0.875** excluding too-small classes):
+
+| fine label | precision | recall | f1 | support |
+|---|---|---|---|---|
+| Benign | 0.000 | 0.000 | 0.000 | 383 |
+| Bot | 0.877 | 0.864 | 0.870 | 330 |
+| DDoS | 1.000 | 0.998 | 0.999 | 25,627 |
+| DoS GoldenEye | 0.998 | 0.991 | 0.995 | 1,967 |
+| DoS Hulk | 1.000 | 0.993 | 0.996 | 34,621 |
+| DoS Slowhttptest | 0.991 | 0.992 | 0.991 | 982 |
+| DoS slowloris | 0.997 | 0.992 | 0.995 | 1,100 |
+| FTP-Patator | 1.000 | 0.999 | 1.000 | 1,129 |
+| Heartbleed | 1.000 | 0.667 | 0.800 | 3 (too small) |
+| Infiltration | 1.000 | 0.600 | 0.750 | 5 (too small) |
+| PortScan | 0.990 | 0.980 | 0.985 | 18,151 |
+| SSH-Patator | 1.000 | 0.994 | 0.997 | 631 |
+| Web Attack - Brute Force | 0.809 | 0.518 | 0.631 | 311 |
+| Web Attack - Sql Injection | 1.000 | 0.500 | 0.667 | 2 (too small) |
+| Web Attack - XSS | 0.265 | 0.115 | 0.160 | 113 |
+
+Coarse categories (derived from the fine decision) — accuracy 0.9917, raw
+top-1 0.9975, coverage 99.2%, macro F1 **0.923** (**0.972** excluding
+too-small classes):
 
 | category | precision | recall | f1 | support |
 |---|---|---|---|---|
 | Benign | 0.000 | 0.000 | 0.000 | 383 |
-| Botnet | 0.946 | 0.791 | 0.861 | 330 |
-| BruteForce | 1.000 | 0.993 | 0.997 | 1,760 |
+| Botnet | 0.877 | 0.864 | 0.870 | 330 |
+| BruteForce | 1.000 | 0.997 | 0.999 | 1,760 |
 | DDoS | 1.000 | 0.998 | 0.999 | 25,627 |
-| DoS | 1.000 | 0.989 | 0.994 | 38,670 |
-| Infiltration | 1.000 | 0.600 | 0.750 | 5 |
-| PortScan | 0.990 | 0.982 | 0.986 | 18,151 |
-| WebAttack | 0.997 | 0.932 | 0.964 | 426 |
+| DoS | 1.000 | 0.994 | 0.997 | 38,670 |
+| Heartbleed | 1.000 | 0.667 | 0.800 | 3 (too small) |
+| Infiltration | 1.000 | 0.600 | 0.750 | 5 (too small) |
+| PortScan | 0.990 | 0.980 | 0.985 | 18,151 |
+| WebAttack | 0.998 | 0.972 | 0.985 | 426 |
 
-n=84,969 true attacks, n_table=85,352 (+383 false positives as Benign).
-accuracy=0.9892, raw top-1 accuracy=0.9980, coverage=98.9%, **macro F1
-(attack classes only) = 0.936**. Now that Heartbleed's phantom row and its
-~0 f1 are gone, macro F1 is markedly higher than the earlier (incorrect)
-0.823 figure — the two classes still visibly dragging it down are **Botnet**
-(support=330, recall 0.791 — some correct-but-lower-confidence Botnet calls
-get punted to `Unknown` at this threshold) and **Infiltration** (support=5,
-recall 0.600 — too few rows to draw a real conclusion from). Botnet's and
-PortScan's precision (0.946, 0.990) are now visibly below 1.000 — exactly
-the false-positive contamination item 2 above exists to surface: some of the
-383 binary false positives get mislabeled as those specific categories
-instead of punted to `Unknown` (see the false-positive categorisation rate
-above).
+### Threshold 0.80 vs 0.90 (TEST split)
+
+| | 0.80 | 0.90 |
+|---|---|---|
+| coarse macro F1 (all / excl. too-small) | 0.923 / 0.972 | 0.881 / 0.966 |
+| fine macro F1 (all / excl. too-small) | 0.846 / 0.875 | 0.813 / 0.861 |
+| coarse coverage | 99.2% | 98.7% |
+| fine coverage | 98.9% | 98.4% |
+| FP categorisation (binary false positives given a specific category) | 227/383 (59.3%) | 186/383 (48.6%) |
+| web-attack flows with a wrong specific label | 73/426 | 46/426 |
+
+Before the fine-label change (coarse model, 0.90), coarse macro F1 over the
+same 7 attack classes was 0.936; the fine-label model scores 0.935 on those
+7 classes at 0.90, i.e. no regression.
+
+### Web attack confusion (known limitation)
+
+True (rows) vs predicted fine label (columns), TEST split, scored attacks:
+
+Threshold 0.80:
+
+| true \ predicted | Unknown | Brute Force | Sql Injection | XSS |
+|---|---|---|---|---|
+| Web Attack - Brute Force | 114 | 161 | 0 | 36 |
+| Web Attack - Sql Injection | 1 | 0 | 1 | 0 |
+| Web Attack - XSS | 63 | 37 | 0 | 13 |
+
+**73 of 426** web-attack flows (17%) get a wrong specific fine label with
+confidence >= 0.80 (46/426 at 0.90). Brute Force and XSS flows are
+statistically near-identical in CICIDS2017's flow features (the attacks run
+through the same web-form traffic), so the model cannot separate them; XSS
+recall is 0.115. The coarse `WebAttack` category is unaffected (F1 0.985),
+which is why downstream consumers of the coarse category see no regression.
+Sql Injection has 2 test rows — no conclusion possible.
 
 ### Threshold sweep and recommendation rule
 
-`--offline` then sweeps `CATEGORY_CONFIDENCE_THRESHOLD` over
+`--offline` sweeps `CATEGORY_CONFIDENCE_THRESHOLD` over
 `offline_eval.CATEGORY_THRESHOLD_SWEEP` (0.5/0.6/0.7/0.8/0.9) — **on a
-VALIDATION split carved from TRAIN** (`data.split_validation`, a separate
-fixed random_state from `data.split_train_test`), never on TEST, so choosing
-a threshold never tunes on the data the report above is scored on
-(Heartbleed excluded here too, for the same reason). Prints the table and
-saves it to `src/detection/results/category_threshold_sweep.csv`
-(gitignored). A real run:
+VALIDATION split carved from TRAIN** (`data.split_validation`), never on
+TEST. Prints the table and saves it to
+`src/detection/results/category_threshold_sweep.csv` (gitignored). A real
+run (`cat_acc` = coarse category accuracy, which drives the recommendation;
+label columns are the fine-label equivalents):
 
-| threshold | n_scored | accuracy | %unknown | n_fp | fp_rate |
-|---|---|---|---|---|---|
-| 0.50 | 68,118 | 0.999 | 0.1 | 190 | 61.1 |
-| 0.60 | 68,118 | 0.998 | 0.2 | 190 | 49.5 |
-| 0.70 | 68,118 | 0.997 | 0.3 | 190 | 46.8 |
-| 0.80 | 68,118 | 0.995 | 0.5 | 190 | 45.8 |
-| 0.90 | 68,118 | 0.992 | 0.8 | 190 | 43.7 |
+| threshold | n_scored | cat_acc | %cat_unk | label_acc | %lbl_unk | n_fp | fp_rate |
+|---|---|---|---|---|---|---|---|
+| 0.50 | 68,119 | 0.9980 | 0.2 | 0.9979 | 0.2 | 190 | 50.5 |
+| 0.60 | 68,119 | 0.9968 | 0.3 | 0.9967 | 0.3 | 190 | 47.9 |
+| 0.70 | 68,119 | 0.9952 | 0.5 | 0.9950 | 0.5 | 190 | 45.8 |
+| 0.80 | 68,119 | 0.9931 | 0.7 | 0.9930 | 0.7 | 190 | 45.3 |
+| 0.90 | 68,119 | 0.9896 | 1.0 | 0.9894 | 1.1 | 190 | 41.6 |
 
 **Recommendation rule** (`recommend_category_threshold`,
 `--min-category-accuracy`, default `0.99`): recommend the **highest** swept
-threshold whose validation category accuracy is `>= min_category_accuracy` —
-among thresholds that all clear the accuracy bar, prefer the strictest one
-(more conservative: more borderline guesses get punted to `Unknown` instead
-of risking a wrong specific answer). If no threshold clears the bar, falls
-back to the single highest-accuracy row (ties broken by the lower
-false-positive categorisation rate, then the higher threshold) and says so
-explicitly. `--offline` always prints the exact rule that fired
-(`describe_recommendation_rule`) alongside the recommendation, then reports
-that threshold's full per-class table on TEST for comparison.
-`subagent.DEFAULT_CATEGORY_CONFIDENCE_THRESHOLD` is never changed
-automatically by this script — only printed as a recommendation.
+threshold whose validation coarse category accuracy is `>= min_category_accuracy`.
+If none clears the bar, fall back to the highest-accuracy row (ties: lower
+FP rate, then higher threshold) and say so. `--offline` prints the rule that
+fired (`describe_recommendation_rule`), then the recommended threshold's
+TEST tables.
 
-**On the real sweep above, every one of the 5 swept values (0.999 down to
-0.992) already clears the 0.99 bar** — the rule picks the *highest*
-threshold among them, **0.90**, directly, with no fallback
-(`meets_min_accuracy: True`); it does not matter that 0.90's own accuracy
-(0.992) is the lowest of the five, since all five qualify and the rule
-prefers the strictest (highest) threshold among qualifiers. **0.90 is the
-current default.**
+**With the fine-label model, validation accuracy at 0.90 is 0.9896 — just
+below the 0.99 bar (the old coarse model's was 0.992) — so the rule now
+picks 0.80 (0.9931).** `DEFAULT_CATEGORY_CONFIDENCE_THRESHOLD` was set to
+0.80 by hand to match; the script itself never changes it. The cost: more
+borderline calls are trusted, including on binary false positives
+(FP categorisation 48.6% -> 59.3%).
 
 ## Known limitations
 
-- **Infiltration** has only 5 support rows in the TEST split — its recall
-  (0.600) is not a reliable signal, just too few rows to draw a conclusion
-  from.
-- **Botnet** recall (0.791) is the other main drag on macro F1: some
-  correct-but-lower-confidence Botnet calls get punted to `Unknown` at the
-  current threshold.
-- The false-positive categorisation rate (79.4%) is reduced but not
-  eliminated by the Benign class + threshold tuning — see
+- **Web Attack - XSS vs Brute Force** are not separable by this model (see
+  above); Sql Injection, Heartbleed and Infiltration have too few test rows
+  (2, 3, 5) to evaluate.
+- **Bot** (support 330, F1 0.870) is the weakest well-supported class.
+- The false-positive categorisation rate (59.3% at 0.80) is reduced but not
+  eliminated by the Benign class — see
   [design-decisions.md](design-decisions.md) for why this isn't obviously a
-  code bug, and the threshold/ratio levers still available.
+  code bug.
 - The threshold sweep is run once against a fixed validation split; it is
-  not re-run automatically when the underlying training data or feature
-  engineering changes.
+  not re-run automatically when the training data or feature engineering
+  changes.

@@ -22,20 +22,33 @@ conclusion. Full contract details: [docs/architecture.md](docs/architecture.md).
 For every event, `DetectionResult.detector_notes` is one of:
 
 - **`None`** — the event was not anomalous (benign). No note is produced.
-- **`"[category=X] <explanation>"`** — the event was anomalous.
-  `X` is always present and always code-decided (never an LLM output):
-  either a fixed category (`DoS`, `DDoS`, `PortScan`, `BruteForce`,
-  `WebAttack`, `Botnet`, `Infiltration`) or `"Unknown"`. `<explanation>` is
-  either an LLM-generated explanation (when `use_llm=True` and it succeeds)
-  or a fixed template sentence.
+- **`"[category=X] [label=Y] <explanation>"`** — the event was anomalous.
+  `X` and `Y` are always present and always code-decided (never an LLM
+  output). `X` is the coarse category: `DoS`, `DDoS`, `PortScan`,
+  `BruteForce`, `WebAttack`, `Botnet`, `Infiltration`, `Heartbleed`, or
+  `"Unknown"`. `Y` is the fine CICIDS2017 label (`DoS Hulk`, `FTP-Patator`,
+  `Web Attack - XSS`, ...) or `"Unknown"`. `<explanation>` is either an
+  LLM-generated explanation (when `use_llm=True` and it succeeds) or a fixed
+  template sentence.
 
-**What `Unknown` means:** either the category classifier's top-confidence
-class didn't clear `CATEGORY_CONFIDENCE_THRESHOLD`, or the classifier voted
+**Decision rule** (threshold `CATEGORY_CONFIDENCE_THRESHOLD`, default 0.80;
+a group's probability is the sum of its fine labels'):
+top fine label >= threshold -> `Y` = that label, `X` = its group; else top
+group >= threshold -> `Y` = `Unknown`, `X` = that group; else both `Unknown`.
+Benign top -> both `Unknown` (see below).
+
+**What `Unknown` means:** for `Y`, no single fine label cleared the
+threshold. For `X` (and `Y`), not even the group did, or the classifier voted
 `Benign` on an event the binary model already called anomalous (a
 disagreement between the two models — never reported as `Benign`, since
 that would contradict `is_anomalous=True`). Downstream agents should treat
-`Unknown` as "flagged anomalous, category not resolved," not as a fifth
-attack type.
+`Unknown` as "flagged anomalous, not resolved," not as an attack type.
+`X` can be known while `Y` is `Unknown` (e.g. DoS sub-types indistinguishable).
+
+**Known limitation:** `Web Attack - XSS` and `Web Attack - Brute Force`
+are largely confused with each other (XSS F1 ~0.16); the coarse `WebAttack`
+category is reliable (F1 ~0.985). Prefer `X` unless you need the sub-type —
+see [docs/evaluation.md](docs/evaluation.md).
 
 **What `model_disagreement` means:** the specific case above — the category
 model's top vote was `Benign` while the binary model called the event

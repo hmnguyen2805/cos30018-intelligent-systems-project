@@ -27,10 +27,24 @@ BORDERLINE_LOW = 0.4
 BORDERLINE_HIGH = 0.6
 DISAGREEMENT_THRESHOLD = 0.15  # tree-vote std above this = low ensemble consensus
 
-# Below this, the category model's top class isn't trusted and code reports "Unknown" instead.
+# Below this, the category model's top label/group isn't trusted and code reports "Unknown" instead.
 # Default chosen by the threshold sweep — see docs/evaluation.md.
-DEFAULT_CATEGORY_CONFIDENCE_THRESHOLD = 0.9
+DEFAULT_CATEGORY_CONFIDENCE_THRESHOLD = 0.8
 CATEGORY_TOP_K = 3
+
+
+def decide_category(top_label, top_label_p, top_category, top_category_p, threshold):
+    """The three-way category rule — pure, no LLM. Returns (label, category,
+    disagreement). Benign top (fine or coarse) -> Unknown/Unknown + disagreement;
+    top fine label >= threshold -> that label and its group; else top coarse
+    group >= threshold -> label "Unknown", that group; else Unknown/Unknown."""
+    if classifier.BENIGN_CATEGORY in (top_label, top_category):
+        return "Unknown", "Unknown", True
+    if top_label_p >= threshold:
+        return top_label, classifier.coarse_category(top_label), False
+    if top_category_p >= threshold:
+        return "Unknown", top_category, False
+    return "Unknown", "Unknown", False
 
 
 class DetectionSubagent(BaseAgent):
@@ -130,15 +144,16 @@ class DetectionSubagent(BaseAgent):
         is_anomalous = final_p >= 0.5
         confidence = final_p if is_anomalous else 1.0 - final_p
 
-        chosen_category = None
-        category_probability = None
+        chosen_label = chosen_category = category_probability = None
         if is_anomalous:
-            chosen_category, category_probability = self._choose_category(event)
+            chosen_label, chosen_category, category_probability = self._choose_category(event)
 
         if is_anomalous and self.use_llm:
-            notes = self._apply_llm_layer(event, p_anomalous, vote_std, notes, chosen_category, category_probability)
+            notes = self._apply_llm_layer(
+                event, p_anomalous, vote_std, notes, chosen_label, chosen_category, category_probability,
+            )
         elif chosen_category is not None:
-            notes = self._tag_with_category(chosen_category, notes)
+            notes = self._tag_with_category(chosen_category, chosen_label, notes)
 
         self.log_step(
             thought="Finalize decision.",
@@ -146,76 +161,82 @@ class DetectionSubagent(BaseAgent):
             observation=f"is_anomalous={is_anomalous}, confidence={confidence:.3f}",
         )
 
-        return DetectionResult(
+        result = DetectionResult(
             event=event,
             is_anomalous=is_anomalous,
             confidence=confidence,
             detector_notes=notes,
             trace=self.get_trace(),
         )
+        # shared/schemas.py may not have these fields (yet); the notes tags carry them either way.
+        if hasattr(result, "attack_category"):
+            result.attack_category = chosen_category
+        if hasattr(result, "attack_label"):
+            result.attack_label = chosen_label
+        return result
 
-    def _choose_category(self, event: TrafficEvent) -> Tuple[str, Optional[float]]:
-        """Deterministically choose the attack category (never the LLM).
-        Returns (category, top_probability) — top_probability is returned
+    def _choose_category(self, event: TrafficEvent) -> Tuple[str, str, Optional[float]]:
+        """Deterministically choose the fine attack label and its coarse
+        category (never the LLM) via decide_category. Returns (label,
+        category, top_category_probability) — the probability is returned
         even when the result is "Unknown", so callers can compare against
-        the raw top-1 class. See docs/architecture.md (category decision)."""
+        the raw top-1 group. See docs/architecture.md (category decision)."""
         if self._category_artifact is None:
             self.log_step(
-                thought="No category model loaded — reporting category as Unknown.",
+                thought="No category model loaded — reporting label and category as Unknown.",
                 action="category_model_unavailable",
             )
-            return "Unknown", None
+            return "Unknown", "Unknown", None
 
         ranked = classifier.predict_attack_category(self._category_artifact, event.features, top_k=CATEGORY_TOP_K)
-        top_category, top_probability = ranked[0]["category"], ranked[0]["probability"]
+        top_label, top_label_p = ranked["labels"][0]["label"], ranked["labels"][0]["probability"]
+        top_category, top_category_p = ranked["categories"][0]["category"], ranked["categories"][0]["probability"]
+        threshold = self._category_confidence_threshold
 
-        if top_category == classifier.BENIGN_CATEGORY:
-            chosen = "Unknown"
-            self.log_step(
-                thought=f"Category model's top class is {classifier.BENIGN_CATEGORY} "
-                        f"(probability={top_probability:.3f}), but the binary model already called "
-                        "this event anomalous — binary/category model disagreement. Reporting "
-                        "Unknown rather than trusting either side's specific label.",
-                action="model_disagreement",
-                tool_input={
-                    "chosen_category": chosen, "raw_top_category": top_category,
-                    "raw_top_probability": top_probability, "threshold": self._category_confidence_threshold,
-                },
-                observation=f"top3={ranked}",
-            )
-            return chosen, top_probability
-
-        chosen = top_category if top_probability >= self._category_confidence_threshold else "Unknown"
-
-        self.log_step(
-            thought=f"Category model top class: {top_category} (probability={top_probability:.3f}). "
-                    f"{'Above' if chosen == top_category else 'Below'} the "
-                    f"{self._category_confidence_threshold:.2f} confidence threshold.",
-            action="category_decision",
-            tool_input={
-                "chosen_category": chosen, "raw_top_category": top_category,
-                "raw_top_probability": top_probability, "threshold": self._category_confidence_threshold,
-            },
-            observation=f"top3={ranked}",
+        label, category, disagreement = decide_category(
+            top_label, top_label_p, top_category, top_category_p, threshold,
         )
-        return chosen, top_probability
+        tool_input = {
+            "chosen_label": label, "chosen_category": category,
+            "raw_top_label": top_label, "raw_top_label_probability": top_label_p,
+            "raw_top_category": top_category, "raw_top_probability": top_category_p,
+            "threshold": threshold,
+        }
+        if disagreement:
+            self.log_step(
+                thought=f"Category model's top vote is {classifier.BENIGN_CATEGORY} "
+                        f"(label={top_label} p={top_label_p:.3f}, category={top_category} "
+                        f"p={top_category_p:.3f}), but the binary model already called this event "
+                        "anomalous — binary/category model disagreement. Reporting Unknown rather "
+                        "than trusting either side's specific label.",
+                action="model_disagreement", tool_input=tool_input, observation=f"top={ranked}",
+            )
+        else:
+            self.log_step(
+                thought=f"Top fine label {top_label} (p={top_label_p:.3f}), top group {top_category} "
+                        f"(p={top_category_p:.3f}), threshold {threshold:.2f} -> label={label}, "
+                        f"category={category}.",
+                action="category_decision", tool_input=tool_input, observation=f"top={ranked}",
+            )
+        return label, category, top_category_p
 
     @staticmethod
-    def _tag_with_category(category: str, base_notes: Optional[str]) -> str:
-        tag = f"[category={category}]"
+    def _tag_with_category(category: str, label: str, base_notes: Optional[str]) -> str:
+        tag = f"[category={category}] [label={label}]"
         return f"{tag} {base_notes}" if base_notes else tag
 
     def _apply_llm_layer(
         self, event: TrafficEvent, p_anomalous: float, vote_std: Optional[float],
-        deterministic_notes: Optional[str], chosen_category: str, category_probability: Optional[float],
+        deterministic_notes: Optional[str], chosen_label: str, chosen_category: str,
+        category_probability: Optional[float],
     ) -> str:
         """Return detector_notes after attempting the LLM layer:
-        "[category=X] explanation", X always the pre-decided category.
+        "[category=X] [label=Y] explanation", both always the pre-decided values.
         Never raises — explain() falls back to a template note on failure."""
         llm_result = self._llm.explain(event, p_anomalous, vote_std, chosen_category, category_probability)
         explanation = llm_result["explanation"] if llm_result is not None else build_template_note(vote_std)
 
-        tag = self._tag_with_category(chosen_category, explanation)
+        tag = self._tag_with_category(chosen_category, chosen_label, explanation)
         if deterministic_notes:
             return f"{tag} {deterministic_notes}"
         return tag
