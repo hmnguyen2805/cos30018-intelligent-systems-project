@@ -1,0 +1,2652 @@
+[
+  {
+    "task_id": "S01",
+    "difficulty": "simple",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "act"
+    ],
+    "outcome": "act",
+    "correct": true,
+    "unsafe": false,
+    "over_cautious": false,
+    "wrong_technique": false,
+    "case": "AGREED_THREAT",
+    "decided_by": "rules",
+    "recommended_action": "Lock account after repeated failed logins; alert analyst.",
+    "technique": "T1110",
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.1822998747229576,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=True, confidence=0.97"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "delegate_to_subagent",
+        "thought": "Delegate to Correlation Subagent.",
+        "input": null,
+        "observation": null
+      },
+      {
+        "agent": "mitigation",
+        "step": 2,
+        "action": "decide_action",
+        "thought": "Reason over correlation result (technique=T1110).",
+        "input": null,
+        "observation": "Lock account after repeated failed logins; alert analyst."
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=anomalous (conf=0.97); mitigation techniques=T1110,T1110.001 (conf=0.90), proposed_action='Lock account after repeated failed logins; alert analyst.'; agree=True"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Both managers agree on a threat (T1110, T1110.001) with sufficient confidence; applying the proposed action.",
+        "input": {
+          "case": "AGREED_THREAT"
+        },
+        "observation": "action=Lock account after repeated failed logins; alert analyst., escalate=False"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "finalize",
+        "thought": "Finalize the response.",
+        "input": null,
+        "observation": "recommended_action=Lock account after repeated failed logins; alert analyst."
+      }
+    ]
+  },
+  {
+    "task_id": "S02",
+    "difficulty": "simple",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "act"
+    ],
+    "outcome": "act",
+    "correct": true,
+    "unsafe": false,
+    "over_cautious": false,
+    "wrong_technique": false,
+    "case": "AGREED_THREAT",
+    "decided_by": "rules",
+    "recommended_action": "Lock account after repeated failed logins; alert analyst.",
+    "technique": "T1110",
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.12530013918876648,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=True, confidence=0.95"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "delegate_to_subagent",
+        "thought": "Delegate to Correlation Subagent.",
+        "input": null,
+        "observation": null
+      },
+      {
+        "agent": "mitigation",
+        "step": 2,
+        "action": "decide_action",
+        "thought": "Reason over correlation result (technique=T1110).",
+        "input": null,
+        "observation": "Lock account after repeated failed logins; alert analyst."
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=anomalous (conf=0.95); mitigation techniques=T1110,T1110.001 (conf=0.90), proposed_action='Lock account after repeated failed logins; alert analyst.'; agree=True"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Both managers agree on a threat (T1110, T1110.001) with sufficient confidence; applying the proposed action.",
+        "input": {
+          "case": "AGREED_THREAT"
+        },
+        "observation": "action=Lock account after repeated failed logins; alert analyst., escalate=False"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "finalize",
+        "thought": "Finalize the response.",
+        "input": null,
+        "observation": "recommended_action=Lock account after repeated failed logins; alert analyst."
+      }
+    ]
+  },
+  {
+    "task_id": "S03",
+    "difficulty": "simple",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "act"
+    ],
+    "outcome": "act",
+    "correct": true,
+    "unsafe": false,
+    "over_cautious": false,
+    "wrong_technique": false,
+    "case": "AGREED_THREAT",
+    "decided_by": "rules",
+    "recommended_action": "Block or rate-limit the source; protect the targeted service.",
+    "technique": "T1499",
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.09349989704787731,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=True, confidence=0.99"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "delegate_to_subagent",
+        "thought": "Delegate to Correlation Subagent.",
+        "input": null,
+        "observation": null
+      },
+      {
+        "agent": "mitigation",
+        "step": 2,
+        "action": "decide_action",
+        "thought": "Reason over correlation result (technique=T1499).",
+        "input": null,
+        "observation": "Block or rate-limit the source; protect the targeted service."
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=anomalous (conf=0.99); mitigation techniques=T1499,T1498 (conf=0.90), proposed_action='Block or rate-limit the source; protect the targeted service.'; agree=True"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Both managers agree on a threat (T1499, T1498) with sufficient confidence; applying the proposed action.",
+        "input": {
+          "case": "AGREED_THREAT"
+        },
+        "observation": "action=Block or rate-limit the source; protect the targeted service., escalate=False"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "finalize",
+        "thought": "Finalize the response.",
+        "input": null,
+        "observation": "recommended_action=Block or rate-limit the source; protect the targeted service."
+      }
+    ]
+  },
+  {
+    "task_id": "S04",
+    "difficulty": "simple",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "act"
+    ],
+    "outcome": "act",
+    "correct": true,
+    "unsafe": false,
+    "over_cautious": false,
+    "wrong_technique": false,
+    "case": "AGREED_THREAT",
+    "decided_by": "rules",
+    "recommended_action": "Rate-limit or block the flooding sources upstream; alert analyst.",
+    "technique": "T1498",
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.09620003402233124,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=True, confidence=0.98"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "delegate_to_subagent",
+        "thought": "Delegate to Correlation Subagent.",
+        "input": null,
+        "observation": null
+      },
+      {
+        "agent": "mitigation",
+        "step": 2,
+        "action": "decide_action",
+        "thought": "Reason over correlation result (technique=T1498).",
+        "input": null,
+        "observation": "Rate-limit or block the flooding sources upstream; alert analyst."
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=anomalous (conf=0.98); mitigation techniques=T1498,T1499 (conf=0.90), proposed_action='Rate-limit or block the flooding sources upstream; alert analyst.'; agree=True"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Both managers agree on a threat (T1498, T1499) with sufficient confidence; applying the proposed action.",
+        "input": {
+          "case": "AGREED_THREAT"
+        },
+        "observation": "action=Rate-limit or block the flooding sources upstream; alert analyst., escalate=False"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "finalize",
+        "thought": "Finalize the response.",
+        "input": null,
+        "observation": "recommended_action=Rate-limit or block the flooding sources upstream; alert analyst."
+      }
+    ]
+  },
+  {
+    "task_id": "S05",
+    "difficulty": "simple",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "act"
+    ],
+    "outcome": "act",
+    "correct": true,
+    "unsafe": false,
+    "over_cautious": false,
+    "wrong_technique": false,
+    "case": "AGREED_THREAT",
+    "decided_by": "rules",
+    "recommended_action": "Block the scanning source IP; watch for follow-up attacks.",
+    "technique": "T1046",
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.12060010340064764,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=True, confidence=0.98"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "delegate_to_subagent",
+        "thought": "Delegate to Correlation Subagent.",
+        "input": null,
+        "observation": null
+      },
+      {
+        "agent": "mitigation",
+        "step": 2,
+        "action": "decide_action",
+        "thought": "Reason over correlation result (technique=T1046).",
+        "input": null,
+        "observation": "Block the scanning source IP; watch for follow-up attacks."
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=anomalous (conf=0.98); mitigation techniques=T1046 (conf=0.90), proposed_action='Block the scanning source IP; watch for follow-up attacks.'; agree=True"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Both managers agree on a threat (T1046) with sufficient confidence; applying the proposed action.",
+        "input": {
+          "case": "AGREED_THREAT"
+        },
+        "observation": "action=Block the scanning source IP; watch for follow-up attacks., escalate=False"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "finalize",
+        "thought": "Finalize the response.",
+        "input": null,
+        "observation": "recommended_action=Block the scanning source IP; watch for follow-up attacks."
+      }
+    ]
+  },
+  {
+    "task_id": "S06",
+    "difficulty": "simple",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "no_action"
+    ],
+    "outcome": "no_action",
+    "correct": true,
+    "unsafe": false,
+    "over_cautious": false,
+    "wrong_technique": false,
+    "case": "BOTH_BENIGN",
+    "decided_by": "rules",
+    "recommended_action": "no_action",
+    "technique": null,
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.0727999722585082,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=False, confidence=0.98"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "delegate_to_subagent",
+        "thought": "Delegate to Correlation Subagent.",
+        "input": null,
+        "observation": null
+      },
+      {
+        "agent": "mitigation",
+        "step": 2,
+        "action": "decide_action",
+        "thought": "Reason over correlation result (technique=None).",
+        "input": null,
+        "observation": "No action: detection says the traffic is benign."
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=benign (conf=0.98); mitigation techniques=none (conf=0.00), proposed_action='No action: detection says the traffic is benign.'; agree=True"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Both managers agree there is no threat.",
+        "input": {
+          "case": "BOTH_BENIGN"
+        },
+        "observation": "action=no_action, escalate=False"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "finalize",
+        "thought": "Finalize the response.",
+        "input": null,
+        "observation": "recommended_action=no_action"
+      }
+    ]
+  },
+  {
+    "task_id": "S07",
+    "difficulty": "simple",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "no_action"
+    ],
+    "outcome": "no_action",
+    "correct": true,
+    "unsafe": false,
+    "over_cautious": false,
+    "wrong_technique": false,
+    "case": "BOTH_BENIGN",
+    "decided_by": "rules",
+    "recommended_action": "no_action",
+    "technique": null,
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.11909985914826393,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=False, confidence=0.96"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "delegate_to_subagent",
+        "thought": "Delegate to Correlation Subagent.",
+        "input": null,
+        "observation": null
+      },
+      {
+        "agent": "mitigation",
+        "step": 2,
+        "action": "decide_action",
+        "thought": "Reason over correlation result (technique=None).",
+        "input": null,
+        "observation": "No action: detection says the traffic is benign."
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=benign (conf=0.96); mitigation techniques=none (conf=0.00), proposed_action='No action: detection says the traffic is benign.'; agree=True"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Both managers agree there is no threat.",
+        "input": {
+          "case": "BOTH_BENIGN"
+        },
+        "observation": "action=no_action, escalate=False"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "finalize",
+        "thought": "Finalize the response.",
+        "input": null,
+        "observation": "recommended_action=no_action"
+      }
+    ]
+  },
+  {
+    "task_id": "S08",
+    "difficulty": "simple",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "act"
+    ],
+    "outcome": "act",
+    "correct": true,
+    "unsafe": false,
+    "over_cautious": false,
+    "wrong_technique": false,
+    "case": "AGREED_THREAT",
+    "decided_by": "rules",
+    "recommended_action": "Block outbound C2 traffic; isolate host.",
+    "technique": "T1041",
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.13399997260421515,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=True, confidence=0.94"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "delegate_to_subagent",
+        "thought": "Delegate to Correlation Subagent.",
+        "input": null,
+        "observation": null
+      },
+      {
+        "agent": "mitigation",
+        "step": 2,
+        "action": "decide_action",
+        "thought": "Reason over correlation result (technique=T1041).",
+        "input": null,
+        "observation": "Block outbound C2 traffic; isolate host."
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=anomalous (conf=0.94); mitigation techniques=T1041 (conf=0.90), proposed_action='Block outbound C2 traffic; isolate host.'; agree=True"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Both managers agree on a threat (T1041) with sufficient confidence; applying the proposed action.",
+        "input": {
+          "case": "AGREED_THREAT"
+        },
+        "observation": "action=Block outbound C2 traffic; isolate host., escalate=False"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "finalize",
+        "thought": "Finalize the response.",
+        "input": null,
+        "observation": "recommended_action=Block outbound C2 traffic; isolate host."
+      }
+    ]
+  },
+  {
+    "task_id": "M01",
+    "difficulty": "moderate",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "act"
+    ],
+    "outcome": "act",
+    "correct": true,
+    "unsafe": false,
+    "over_cautious": false,
+    "wrong_technique": false,
+    "case": "AGREED_THREAT",
+    "decided_by": "rules",
+    "recommended_action": "Patch/isolate the vulnerable service; block source IP.",
+    "technique": "T1190",
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.09490002412348986,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=True, confidence=0.92"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "delegate_to_subagent",
+        "thought": "Delegate to Correlation Subagent.",
+        "input": null,
+        "observation": null
+      },
+      {
+        "agent": "mitigation",
+        "step": 2,
+        "action": "decide_action",
+        "thought": "Reason over correlation result (technique=T1190).",
+        "input": null,
+        "observation": "Patch/isolate the vulnerable service; block source IP."
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=anomalous (conf=0.92); mitigation techniques=T1190 (conf=0.90), proposed_action='Patch/isolate the vulnerable service; block source IP.'; agree=True"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Both managers agree on a threat (T1190) with sufficient confidence; applying the proposed action.",
+        "input": {
+          "case": "AGREED_THREAT"
+        },
+        "observation": "action=Patch/isolate the vulnerable service; block source IP., escalate=False"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "finalize",
+        "thought": "Finalize the response.",
+        "input": null,
+        "observation": "recommended_action=Patch/isolate the vulnerable service; block source IP."
+      }
+    ]
+  },
+  {
+    "task_id": "M02",
+    "difficulty": "moderate",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "act"
+    ],
+    "outcome": "act",
+    "correct": true,
+    "unsafe": false,
+    "over_cautious": false,
+    "wrong_technique": false,
+    "case": "AGREED_THREAT",
+    "decided_by": "rules",
+    "recommended_action": "Patch/isolate the vulnerable service; block source IP.",
+    "technique": "T1190",
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.06680004298686981,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=True, confidence=0.9"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "delegate_to_subagent",
+        "thought": "Delegate to Correlation Subagent.",
+        "input": null,
+        "observation": null
+      },
+      {
+        "agent": "mitigation",
+        "step": 2,
+        "action": "decide_action",
+        "thought": "Reason over correlation result (technique=T1190).",
+        "input": null,
+        "observation": "Patch/isolate the vulnerable service; block source IP."
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=anomalous (conf=0.90); mitigation techniques=T1190 (conf=0.90), proposed_action='Patch/isolate the vulnerable service; block source IP.'; agree=True"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Both managers agree on a threat (T1190) with sufficient confidence; applying the proposed action.",
+        "input": {
+          "case": "AGREED_THREAT"
+        },
+        "observation": "action=Patch/isolate the vulnerable service; block source IP., escalate=False"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "finalize",
+        "thought": "Finalize the response.",
+        "input": null,
+        "observation": "recommended_action=Patch/isolate the vulnerable service; block source IP."
+      }
+    ]
+  },
+  {
+    "task_id": "M03",
+    "difficulty": "moderate",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "act"
+    ],
+    "outcome": "act",
+    "correct": true,
+    "unsafe": false,
+    "over_cautious": false,
+    "wrong_technique": false,
+    "case": "AGREED_THREAT",
+    "decided_by": "rules",
+    "recommended_action": "Patch/isolate the vulnerable service; block source IP.",
+    "technique": "T1190",
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.05909998435527086,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=True, confidence=0.99"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "delegate_to_subagent",
+        "thought": "Delegate to Correlation Subagent.",
+        "input": null,
+        "observation": null
+      },
+      {
+        "agent": "mitigation",
+        "step": 2,
+        "action": "decide_action",
+        "thought": "Reason over correlation result (technique=T1190).",
+        "input": null,
+        "observation": "Patch/isolate the vulnerable service; block source IP."
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=anomalous (conf=0.99); mitigation techniques=T1190 (conf=0.90), proposed_action='Patch/isolate the vulnerable service; block source IP.'; agree=True"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Both managers agree on a threat (T1190) with sufficient confidence; applying the proposed action.",
+        "input": {
+          "case": "AGREED_THREAT"
+        },
+        "observation": "action=Patch/isolate the vulnerable service; block source IP., escalate=False"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "finalize",
+        "thought": "Finalize the response.",
+        "input": null,
+        "observation": "recommended_action=Patch/isolate the vulnerable service; block source IP."
+      }
+    ]
+  },
+  {
+    "task_id": "M04",
+    "difficulty": "moderate",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "act"
+    ],
+    "outcome": "act",
+    "correct": true,
+    "unsafe": false,
+    "over_cautious": false,
+    "wrong_technique": false,
+    "case": "AGREED_THREAT",
+    "decided_by": "rules",
+    "recommended_action": "Block or rate-limit the source; protect the targeted service.",
+    "technique": "T1499",
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.1194999786093831,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=True, confidence=0.9"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "delegate_to_subagent",
+        "thought": "Delegate to Correlation Subagent.",
+        "input": null,
+        "observation": null
+      },
+      {
+        "agent": "mitigation",
+        "step": 2,
+        "action": "decide_action",
+        "thought": "Reason over correlation result (technique=T1499).",
+        "input": null,
+        "observation": "Block or rate-limit the source; protect the targeted service."
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=anomalous (conf=0.90); mitigation techniques=T1499,T1498 (conf=0.90), proposed_action='Block or rate-limit the source; protect the targeted service.'; agree=True"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Both managers agree on a threat (T1499, T1498) with sufficient confidence; applying the proposed action.",
+        "input": {
+          "case": "AGREED_THREAT"
+        },
+        "observation": "action=Block or rate-limit the source; protect the targeted service., escalate=False"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "finalize",
+        "thought": "Finalize the response.",
+        "input": null,
+        "observation": "recommended_action=Block or rate-limit the source; protect the targeted service."
+      }
+    ]
+  },
+  {
+    "task_id": "M05",
+    "difficulty": "moderate",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "act",
+      "escalate"
+    ],
+    "outcome": "act",
+    "correct": true,
+    "unsafe": false,
+    "over_cautious": false,
+    "wrong_technique": false,
+    "case": "AGREED_THREAT",
+    "decided_by": "rules",
+    "recommended_action": "Lock account after repeated failed logins; alert analyst.",
+    "technique": "T1110",
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.09010022040456533,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=True, confidence=0.63"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "delegate_to_subagent",
+        "thought": "Delegate to Correlation Subagent.",
+        "input": null,
+        "observation": null
+      },
+      {
+        "agent": "mitigation",
+        "step": 2,
+        "action": "decide_action",
+        "thought": "Reason over correlation result (technique=T1110).",
+        "input": null,
+        "observation": "Lock account after repeated failed logins; alert analyst."
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=anomalous (conf=0.63); mitigation techniques=T1110,T1110.001 (conf=0.90), proposed_action='Lock account after repeated failed logins; alert analyst.'; agree=True"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Both managers agree on a threat (T1110, T1110.001) with sufficient confidence; applying the proposed action.",
+        "input": {
+          "case": "AGREED_THREAT"
+        },
+        "observation": "action=Lock account after repeated failed logins; alert analyst., escalate=False"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "finalize",
+        "thought": "Finalize the response.",
+        "input": null,
+        "observation": "recommended_action=Lock account after repeated failed logins; alert analyst."
+      }
+    ]
+  },
+  {
+    "task_id": "M06",
+    "difficulty": "moderate",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "no_action",
+      "escalate"
+    ],
+    "outcome": "no_action",
+    "correct": true,
+    "unsafe": false,
+    "over_cautious": false,
+    "wrong_technique": false,
+    "case": "BOTH_BENIGN",
+    "decided_by": "rules",
+    "recommended_action": "no_action",
+    "technique": null,
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.16229995526373386,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=False, confidence=0.65"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "delegate_to_subagent",
+        "thought": "Delegate to Correlation Subagent.",
+        "input": null,
+        "observation": null
+      },
+      {
+        "agent": "mitigation",
+        "step": 2,
+        "action": "decide_action",
+        "thought": "Reason over correlation result (technique=None).",
+        "input": null,
+        "observation": "No action: detection says the traffic is benign."
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=benign (conf=0.65); mitigation techniques=none (conf=0.00), proposed_action='No action: detection says the traffic is benign.'; agree=True"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Both managers agree there is no threat.",
+        "input": {
+          "case": "BOTH_BENIGN"
+        },
+        "observation": "action=no_action, escalate=False"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "finalize",
+        "thought": "Finalize the response.",
+        "input": null,
+        "observation": "recommended_action=no_action"
+      }
+    ]
+  },
+  {
+    "task_id": "M07",
+    "difficulty": "moderate",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "escalate"
+    ],
+    "outcome": "escalate",
+    "correct": true,
+    "unsafe": false,
+    "over_cautious": false,
+    "wrong_technique": false,
+    "case": "LOW_DETECTION_CONFIDENCE",
+    "decided_by": "rules",
+    "recommended_action": "escalate_to_human",
+    "technique": null,
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.14789984561502934,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=True, confidence=0.55"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "scripted_result",
+        "thought": null,
+        "input": null,
+        "observation": "techniques=[], confidence=0.3"
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=anomalous (conf=0.55); mitigation techniques=none (conf=0.30), proposed_action='No confident technique match: escalate for manual review.'; agree=False"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Detection confidence 0.55 is below 0.6; a human should confirm before acting.",
+        "input": {
+          "case": "LOW_DETECTION_CONFIDENCE"
+        },
+        "observation": "action=escalate_to_human, escalate=True"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "escalate_to_human",
+        "thought": "Escalate to a human analyst.",
+        "input": null,
+        "observation": "recommended_action=escalate_to_human"
+      }
+    ]
+  },
+  {
+    "task_id": "M08",
+    "difficulty": "moderate",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "escalate"
+    ],
+    "outcome": "escalate",
+    "correct": true,
+    "unsafe": false,
+    "over_cautious": false,
+    "wrong_technique": false,
+    "case": "LOW_MITIGATION_CONFIDENCE",
+    "decided_by": "rules",
+    "recommended_action": "escalate_to_human",
+    "technique": "T1190",
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.08380005601793528,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=True, confidence=0.91"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "scripted_result",
+        "thought": null,
+        "input": null,
+        "observation": "techniques=['T1190'], confidence=0.45"
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=anomalous (conf=0.91); mitigation techniques=T1190 (conf=0.45), proposed_action='Patch/isolate the vulnerable service; block source IP.'; agree=True"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Mitigation confidence 0.45 is below 0.6; the proposed action is not trusted automatically.",
+        "input": {
+          "case": "LOW_MITIGATION_CONFIDENCE"
+        },
+        "observation": "action=escalate_to_human, escalate=True"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "escalate_to_human",
+        "thought": "Escalate to a human analyst.",
+        "input": null,
+        "observation": "recommended_action=escalate_to_human"
+      }
+    ]
+  },
+  {
+    "task_id": "M09",
+    "difficulty": "moderate",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "escalate"
+    ],
+    "outcome": "escalate",
+    "correct": true,
+    "unsafe": false,
+    "over_cautious": false,
+    "wrong_technique": false,
+    "case": "ANOMALOUS_NO_MATCH",
+    "decided_by": "rules",
+    "recommended_action": "escalate_to_human",
+    "technique": null,
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.08340005297213793,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=True, confidence=0.93"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "scripted_result",
+        "thought": null,
+        "input": null,
+        "observation": "techniques=[], confidence=0.31"
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=anomalous (conf=0.93); mitigation techniques=none (conf=0.31), proposed_action='No confident technique match: escalate for manual review.'; agree=False"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Detection flagged a threat but no known ATT&CK technique matched; possibly an attack outside the catalogue.",
+        "input": {
+          "case": "ANOMALOUS_NO_MATCH"
+        },
+        "observation": "action=escalate_to_human, escalate=True"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "escalate_to_human",
+        "thought": "Escalate to a human analyst.",
+        "input": null,
+        "observation": "recommended_action=escalate_to_human"
+      }
+    ]
+  },
+  {
+    "task_id": "D01",
+    "difficulty": "difficult",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "escalate"
+    ],
+    "outcome": "act",
+    "correct": false,
+    "unsafe": true,
+    "over_cautious": false,
+    "wrong_technique": true,
+    "case": "AGREED_THREAT",
+    "decided_by": "rules",
+    "recommended_action": "Lock account after repeated failed logins; alert analyst.",
+    "technique": "T1110",
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.08189980871975422,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=True, confidence=0.91"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "scripted_result",
+        "thought": null,
+        "input": null,
+        "observation": "techniques=['T1110'], confidence=0.85"
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=anomalous (conf=0.91); mitigation techniques=T1110 (conf=0.85), proposed_action='Lock account after repeated failed logins; alert analyst.'; agree=True"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Both managers agree on a threat (T1110) with sufficient confidence; applying the proposed action.",
+        "input": {
+          "case": "AGREED_THREAT"
+        },
+        "observation": "action=Lock account after repeated failed logins; alert analyst., escalate=False"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "finalize",
+        "thought": "Finalize the response.",
+        "input": null,
+        "observation": "recommended_action=Lock account after repeated failed logins; alert analyst."
+      }
+    ]
+  },
+  {
+    "task_id": "D02",
+    "difficulty": "difficult",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "escalate"
+    ],
+    "outcome": "act",
+    "correct": false,
+    "unsafe": true,
+    "over_cautious": false,
+    "wrong_technique": true,
+    "case": "AGREED_THREAT",
+    "decided_by": "rules",
+    "recommended_action": "Patch/isolate the vulnerable service; block source IP.",
+    "technique": "T1190",
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.21899992134422064,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=True, confidence=0.96"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "scripted_result",
+        "thought": null,
+        "input": null,
+        "observation": "techniques=['T1190'], confidence=0.8"
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=anomalous (conf=0.96); mitigation techniques=T1190 (conf=0.80), proposed_action='Patch/isolate the vulnerable service; block source IP.'; agree=True"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Both managers agree on a threat (T1190) with sufficient confidence; applying the proposed action.",
+        "input": {
+          "case": "AGREED_THREAT"
+        },
+        "observation": "action=Patch/isolate the vulnerable service; block source IP., escalate=False"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "finalize",
+        "thought": "Finalize the response.",
+        "input": null,
+        "observation": "recommended_action=Patch/isolate the vulnerable service; block source IP."
+      }
+    ]
+  },
+  {
+    "task_id": "D03",
+    "difficulty": "difficult",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "escalate"
+    ],
+    "outcome": "act",
+    "correct": false,
+    "unsafe": true,
+    "over_cautious": false,
+    "wrong_technique": true,
+    "case": "AGREED_THREAT",
+    "decided_by": "rules",
+    "recommended_action": "Rate-limit or block the flooding sources upstream; alert analyst.",
+    "technique": "T1498",
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.08070003241300583,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=True, confidence=0.9"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "scripted_result",
+        "thought": null,
+        "input": null,
+        "observation": "techniques=['T1498'], confidence=0.82"
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=anomalous (conf=0.90); mitigation techniques=T1498 (conf=0.82), proposed_action='Rate-limit or block the flooding sources upstream; alert analyst.'; agree=True"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Both managers agree on a threat (T1498) with sufficient confidence; applying the proposed action.",
+        "input": {
+          "case": "AGREED_THREAT"
+        },
+        "observation": "action=Rate-limit or block the flooding sources upstream; alert analyst., escalate=False"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "finalize",
+        "thought": "Finalize the response.",
+        "input": null,
+        "observation": "recommended_action=Rate-limit or block the flooding sources upstream; alert analyst."
+      }
+    ]
+  },
+  {
+    "task_id": "D04",
+    "difficulty": "difficult",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "escalate"
+    ],
+    "outcome": "act",
+    "correct": false,
+    "unsafe": true,
+    "over_cautious": false,
+    "wrong_technique": true,
+    "case": "AGREED_THREAT",
+    "decided_by": "rules",
+    "recommended_action": "Block the destination web service; isolate host.",
+    "technique": "T1567",
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.08510006591677666,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=True, confidence=0.92"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "scripted_result",
+        "thought": null,
+        "input": null,
+        "observation": "techniques=['T1567'], confidence=0.8"
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=anomalous (conf=0.92); mitigation techniques=T1567 (conf=0.80), proposed_action='Block the destination web service; isolate host.'; agree=True"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Both managers agree on a threat (T1567) with sufficient confidence; applying the proposed action.",
+        "input": {
+          "case": "AGREED_THREAT"
+        },
+        "observation": "action=Block the destination web service; isolate host., escalate=False"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "finalize",
+        "thought": "Finalize the response.",
+        "input": null,
+        "observation": "recommended_action=Block the destination web service; isolate host."
+      }
+    ]
+  },
+  {
+    "task_id": "D05",
+    "difficulty": "difficult",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "escalate"
+    ],
+    "outcome": "act",
+    "correct": false,
+    "unsafe": true,
+    "over_cautious": false,
+    "wrong_technique": false,
+    "case": "AGREED_THREAT",
+    "decided_by": "rules",
+    "recommended_action": "Quarantine the message/attachment; warn the user.",
+    "technique": "T1566",
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.2050000475719571,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=True, confidence=0.9"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "delegate_to_subagent",
+        "thought": "Delegate to Correlation Subagent.",
+        "input": null,
+        "observation": null
+      },
+      {
+        "agent": "mitigation",
+        "step": 2,
+        "action": "decide_action",
+        "thought": "Reason over correlation result (technique=T1566).",
+        "input": null,
+        "observation": "Quarantine the message/attachment; warn the user."
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=anomalous (conf=0.90); mitigation techniques=T1566,T1190,T1041,T1567 (conf=0.90), proposed_action='Quarantine the message/attachment; warn the user.'; agree=True"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Both managers agree on a threat (T1566, T1190, T1041, T1567) with sufficient confidence; applying the proposed action.",
+        "input": {
+          "case": "AGREED_THREAT"
+        },
+        "observation": "action=Quarantine the message/attachment; warn the user., escalate=False"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "finalize",
+        "thought": "Finalize the response.",
+        "input": null,
+        "observation": "recommended_action=Quarantine the message/attachment; warn the user."
+      }
+    ]
+  },
+  {
+    "task_id": "D06",
+    "difficulty": "difficult",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "escalate"
+    ],
+    "outcome": "escalate",
+    "correct": true,
+    "unsafe": false,
+    "over_cautious": false,
+    "wrong_technique": false,
+    "case": "BENIGN_BUT_ACTION",
+    "decided_by": "rules",
+    "recommended_action": "escalate_to_human",
+    "technique": "T1110",
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.12169999536126852,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=False, confidence=0.9"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "scripted_result",
+        "thought": null,
+        "input": null,
+        "observation": "techniques=['T1110'], confidence=0.7"
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=benign (conf=0.90); mitigation techniques=T1110 (conf=0.70), proposed_action='Lock account after repeated failed logins; alert analyst.'; agree=False"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Conflict: detection says benign but mitigation matched T1110.",
+        "input": {
+          "case": "BENIGN_BUT_ACTION"
+        },
+        "observation": "action=escalate_to_human, escalate=True"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "escalate_to_human",
+        "thought": "Escalate to a human analyst.",
+        "input": null,
+        "observation": "recommended_action=escalate_to_human"
+      }
+    ]
+  },
+  {
+    "task_id": "D07",
+    "difficulty": "difficult",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "act"
+    ],
+    "outcome": "act",
+    "correct": true,
+    "unsafe": false,
+    "over_cautious": false,
+    "wrong_technique": false,
+    "case": "AGREED_THREAT",
+    "decided_by": "rules",
+    "recommended_action": "Block or rate-limit the source; protect the targeted service.",
+    "technique": "T1499",
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.11230004020035267,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=True, confidence=0.95"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "scripted_result",
+        "thought": null,
+        "input": null,
+        "observation": "techniques=['T1499'], confidence=0.8"
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=anomalous (conf=0.95); mitigation techniques=T1499 (conf=0.80), proposed_action='Block or rate-limit the source; protect the targeted service.'; agree=True"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Both managers agree on a threat (T1499) with sufficient confidence; applying the proposed action.",
+        "input": {
+          "case": "AGREED_THREAT"
+        },
+        "observation": "action=Block or rate-limit the source; protect the targeted service., escalate=False"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "finalize",
+        "thought": "Finalize the response.",
+        "input": null,
+        "observation": "recommended_action=Block or rate-limit the source; protect the targeted service."
+      }
+    ]
+  },
+  {
+    "task_id": "D08",
+    "difficulty": "difficult",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "act"
+    ],
+    "outcome": "act",
+    "correct": true,
+    "unsafe": false,
+    "over_cautious": false,
+    "wrong_technique": false,
+    "case": "AGREED_THREAT",
+    "decided_by": "rules",
+    "recommended_action": "Lock account after repeated failed logins; alert analyst.",
+    "technique": "T1110.001",
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.11779984924942255,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=True, confidence=0.94"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "scripted_result",
+        "thought": null,
+        "input": null,
+        "observation": "techniques=['T1110.001'], confidence=0.75"
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=anomalous (conf=0.94); mitigation techniques=T1110.001 (conf=0.75), proposed_action='Lock account after repeated failed logins; alert analyst.'; agree=True"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Both managers agree on a threat (T1110.001) with sufficient confidence; applying the proposed action.",
+        "input": {
+          "case": "AGREED_THREAT"
+        },
+        "observation": "action=Lock account after repeated failed logins; alert analyst., escalate=False"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "finalize",
+        "thought": "Finalize the response.",
+        "input": null,
+        "observation": "recommended_action=Lock account after repeated failed logins; alert analyst."
+      }
+    ]
+  },
+  {
+    "task_id": "E01",
+    "difficulty": "edge",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "escalate"
+    ],
+    "outcome": "escalate",
+    "correct": true,
+    "unsafe": false,
+    "over_cautious": false,
+    "wrong_technique": false,
+    "case": "MITIGATION_MISSING",
+    "decided_by": "rules",
+    "recommended_action": "escalate_to_human",
+    "technique": null,
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.11160003487020731,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {
+      "mitigation": "RuntimeError: Technique catalog unavailable (simulated failure)"
+    },
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=True, confidence=0.96"
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": false
+        },
+        "observation": "detection=anomalous (conf=0.96); mitigation=unavailable (RuntimeError: Technique catalog unavailable (simulated failure)); agree=False"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Detection flagged a threat but no mitigation analysis is available (RuntimeError: Technique catalog unavailable (simulated failure)); cannot choose a response automatically.",
+        "input": {
+          "case": "MITIGATION_MISSING"
+        },
+        "observation": "action=escalate_to_human, escalate=True"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "escalate_to_human",
+        "thought": "Escalate to a human analyst.",
+        "input": null,
+        "observation": "recommended_action=escalate_to_human"
+      }
+    ]
+  },
+  {
+    "task_id": "E02",
+    "difficulty": "edge",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "no_action"
+    ],
+    "outcome": "no_action",
+    "correct": true,
+    "unsafe": false,
+    "over_cautious": false,
+    "wrong_technique": false,
+    "case": "MITIGATION_MISSING",
+    "decided_by": "rules",
+    "recommended_action": "no_action",
+    "technique": null,
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.29880006331950426,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {
+      "mitigation": "RuntimeError: Technique catalog unavailable (simulated failure)"
+    },
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=False, confidence=0.97"
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": false
+        },
+        "observation": "detection=benign (conf=0.97); mitigation=unavailable (RuntimeError: Technique catalog unavailable (simulated failure)); agree=False"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Detection is confidently benign. Mitigation analysis was unavailable, so this result is based on detection only (incomplete).",
+        "input": {
+          "case": "MITIGATION_MISSING"
+        },
+        "observation": "action=no_action, escalate=False"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "finalize",
+        "thought": "Finalize the response.",
+        "input": null,
+        "observation": "recommended_action=no_action"
+      }
+    ]
+  },
+  {
+    "task_id": "E03",
+    "difficulty": "edge",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "failed"
+    ],
+    "outcome": "failed",
+    "correct": true,
+    "unsafe": false,
+    "over_cautious": false,
+    "wrong_technique": false,
+    "case": null,
+    "decided_by": null,
+    "recommended_action": null,
+    "technique": null,
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.015500001609325409,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {
+      "detection": "RuntimeError: Detection model unavailable (simulated failure)"
+    },
+    "skip_reason": null,
+    "trace": []
+  },
+  {
+    "task_id": "E04",
+    "difficulty": "edge",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "escalate"
+    ],
+    "outcome": "act",
+    "correct": false,
+    "unsafe": true,
+    "over_cautious": false,
+    "wrong_technique": true,
+    "case": "AGREED_THREAT",
+    "decided_by": "rules",
+    "recommended_action": "Escalate: unrecognised technique.",
+    "technique": "T9999",
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.09529991075396538,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=True, confidence=0.95"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "scripted_result",
+        "thought": null,
+        "input": null,
+        "observation": "techniques=['T9999'], confidence=0.9"
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=anomalous (conf=0.95); mitigation techniques=T9999 (conf=0.90), proposed_action='Escalate: unrecognised technique.'; agree=True"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Both managers agree on a threat (T9999) with sufficient confidence; applying the proposed action.",
+        "input": {
+          "case": "AGREED_THREAT"
+        },
+        "observation": "action=Escalate: unrecognised technique., escalate=False"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "finalize",
+        "thought": "Finalize the response.",
+        "input": null,
+        "observation": "recommended_action=Escalate: unrecognised technique."
+      }
+    ]
+  },
+  {
+    "task_id": "E05",
+    "difficulty": "edge",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "act",
+      "escalate"
+    ],
+    "outcome": "act",
+    "correct": true,
+    "unsafe": false,
+    "over_cautious": false,
+    "wrong_technique": false,
+    "case": "AGREED_THREAT",
+    "decided_by": "rules",
+    "recommended_action": "Lock account after repeated failed logins; alert analyst.",
+    "technique": "T1110",
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.08729996625334024,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=True, confidence=0.9"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "scripted_result",
+        "thought": null,
+        "input": null,
+        "observation": "techniques=['T1110'], confidence=0.9"
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=anomalous (conf=0.90); mitigation techniques=T1110 (conf=0.90), proposed_action='Lock account after repeated failed logins; alert analyst.'; agree=True"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Both managers agree on a threat (T1110) with sufficient confidence; applying the proposed action.",
+        "input": {
+          "case": "AGREED_THREAT"
+        },
+        "observation": "action=Lock account after repeated failed logins; alert analyst., escalate=False"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "finalize",
+        "thought": "Finalize the response.",
+        "input": null,
+        "observation": "recommended_action=Lock account after repeated failed logins; alert analyst."
+      }
+    ]
+  },
+  {
+    "task_id": "E06",
+    "difficulty": "edge",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "escalate"
+    ],
+    "outcome": "escalate",
+    "correct": true,
+    "unsafe": false,
+    "over_cautious": false,
+    "wrong_technique": false,
+    "case": "LOW_DETECTION_CONFIDENCE",
+    "decided_by": "rules",
+    "recommended_action": "escalate_to_human",
+    "technique": null,
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.09549991227686405,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=True, confidence=0.5"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "scripted_result",
+        "thought": null,
+        "input": null,
+        "observation": "techniques=[], confidence=0.2"
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=anomalous (conf=0.50); mitigation techniques=none (conf=0.20), proposed_action='No confident technique match: escalate for manual review.'; agree=False"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Detection confidence 0.50 is below 0.6; a human should confirm before acting.",
+        "input": {
+          "case": "LOW_DETECTION_CONFIDENCE"
+        },
+        "observation": "action=escalate_to_human, escalate=True"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "escalate_to_human",
+        "thought": "Escalate to a human analyst.",
+        "input": null,
+        "observation": "recommended_action=escalate_to_human"
+      }
+    ]
+  },
+  {
+    "task_id": "E07",
+    "difficulty": "edge",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "act"
+    ],
+    "outcome": "act",
+    "correct": true,
+    "unsafe": false,
+    "over_cautious": false,
+    "wrong_technique": false,
+    "case": "AGREED_THREAT",
+    "decided_by": "rules",
+    "recommended_action": "Lock account after repeated failed logins; alert analyst.",
+    "technique": "T1110",
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.10240008123219013,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=True, confidence=0.95"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "scripted_result",
+        "thought": null,
+        "input": null,
+        "observation": "techniques=['T1110'], confidence=0.6"
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=anomalous (conf=0.95); mitigation techniques=T1110 (conf=0.60), proposed_action='Lock account after repeated failed logins; alert analyst.'; agree=True"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Both managers agree on a threat (T1110) with sufficient confidence; applying the proposed action.",
+        "input": {
+          "case": "AGREED_THREAT"
+        },
+        "observation": "action=Lock account after repeated failed logins; alert analyst., escalate=False"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "finalize",
+        "thought": "Finalize the response.",
+        "input": null,
+        "observation": "recommended_action=Lock account after repeated failed logins; alert analyst."
+      }
+    ]
+  },
+  {
+    "task_id": "E08",
+    "difficulty": "edge",
+    "split": "dev",
+    "mode": "rules",
+    "repeat": 0,
+    "expected": [
+      "act"
+    ],
+    "outcome": "act",
+    "correct": true,
+    "unsafe": false,
+    "over_cautious": false,
+    "wrong_technique": false,
+    "case": "AGREED_THREAT",
+    "decided_by": "rules",
+    "recommended_action": "Lock account after repeated failed logins; alert analyst.",
+    "technique": "T1110",
+    "rechecks": 0,
+    "iterations": 0,
+    "llm_calls": 0,
+    "tokens": 0,
+    "llm_latency_ms": 0.0,
+    "total_ms": 0.07470010314136744,
+    "invalid_replies": 0,
+    "recovered_replies": 0,
+    "fallback_reason": null,
+    "tool_steps": 0,
+    "tool_ok": 0,
+    "errors": {},
+    "skip_reason": null,
+    "trace": [
+      {
+        "agent": "detection",
+        "step": 1,
+        "action": "finalize",
+        "thought": null,
+        "input": null,
+        "observation": "is_anomalous=True, confidence=0.6"
+      },
+      {
+        "agent": "mitigation",
+        "step": 1,
+        "action": "delegate_to_subagent",
+        "thought": "Delegate to Correlation Subagent.",
+        "input": null,
+        "observation": null
+      },
+      {
+        "agent": "mitigation",
+        "step": 2,
+        "action": "decide_action",
+        "thought": "Reason over correlation result (technique=T1110).",
+        "input": null,
+        "observation": "Lock account after repeated failed logins; alert analyst."
+      },
+      {
+        "agent": "judge",
+        "step": 1,
+        "action": "compare_conclusions",
+        "thought": "Compare the Detection Manager's and Mitigation Manager's conclusions.",
+        "input": {
+          "mitigation_available": true
+        },
+        "observation": "detection=anomalous (conf=0.60); mitigation techniques=T1110,T1110.001 (conf=0.90), proposed_action='Lock account after repeated failed logins; alert analyst.'; agree=True"
+      },
+      {
+        "agent": "judge",
+        "step": 2,
+        "action": "apply_decision_rule",
+        "thought": "Both managers agree on a threat (T1110, T1110.001) with sufficient confidence; applying the proposed action.",
+        "input": {
+          "case": "AGREED_THREAT"
+        },
+        "observation": "action=Lock account after repeated failed logins; alert analyst., escalate=False"
+      },
+      {
+        "agent": "judge",
+        "step": 3,
+        "action": "finalize",
+        "thought": "Finalize the response.",
+        "input": null,
+        "observation": "recommended_action=Lock account after repeated failed logins; alert analyst."
+      }
+    ]
+  }
+]
