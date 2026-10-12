@@ -140,4 +140,4 @@ class PipelineRun:
 
     @property
     def succeeded(self) -> bool:
-        return self.response is not None
+        return self.response is not None
