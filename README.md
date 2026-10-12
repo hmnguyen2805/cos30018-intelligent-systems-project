@@ -66,6 +66,16 @@ Pick the Judge mode: `rules` (no LLM), `single_shot` (one LLM call) or `agent`
 (the LLM agent loop, which can recheck). If the LLM isn't reachable, the Judge
 falls back to its rule table and the UI says so.
 
+## Evaluate
+
+Runs the test tasks through the full pipeline in each Judge mode and reports
+the spec section 6 metrics. See [evaluation/README.md](evaluation/README.md).
+
+```sh
+python scripts/run_evaluation.py                          # 33 dev tasks, rules mode, no LLM needed
+python scripts/run_evaluation.py --modes all --repeats 3  # rules vs single_shot vs agent (needs Ollama)
+```
+
 ## Test
 
 No trained model, LLM or network needed (LLMs and encoders are replaced by fakes):
@@ -95,6 +105,8 @@ src/correlation/  Mitigation Manager + Correlation Subagent, technique catalog
 src/response/     Judge Agent: modes, tools, playbook, guardrails, rules
 src/pipeline.py   runs the agents in order, rechecks, failure handling, timings
 src/ui/           Gradio UI and demo scenarios
+src/evaluation/   evaluation harness: tasks, runner, metrics report
+evaluation/       task sets and results
 scripts/          demo scripts
 tests/            automated tests (pytest)
 docs/             architecture and run logs
