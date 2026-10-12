@@ -1,5 +1,5 @@
 {
-  "_comment": "Judge knowledge base. 'techniques': response guidance per MITRE ATT&CK technique (the 6 seed techniques plus T1498, T1499, T1046 to cover Detection's DoS, DDoS and PortScan categories). 'category_techniques': which techniques are consistent with each Detection attack category (Detection tags detector_notes with [category=...]).",
+  "_comment": "Judge knowledge base. 'techniques': response guidance per MITRE ATT&CK technique (the 6 seed techniques plus T1498, T1499, T1046 to cover Detection's DoS, DDoS and PortScan categories; Heartbleed maps to T1190). 'category_techniques': which techniques are consistent with each Detection attack category (Detection tags detector_notes with [category=...]).",
   "techniques": {
     "T1110": {
       "name": "Brute Force",
@@ -19,7 +19,7 @@
     "T1190": {
       "name": "Exploit Public-Facing Application",
       "tactic": "Initial Access",
-      "guidance": "Attacks against internet-facing services (e.g. web attacks, SQL injection, XSS). Blocking the source and isolating or patching the targeted service is appropriate. Escalate if the service holds sensitive data."
+      "guidance": "Attacks against internet-facing services (e.g. web attacks, SQL injection, XSS, or Heartbleed against a TLS service). Blocking the source and isolating or patching the targeted service is appropriate. Escalate if the service holds sensitive data."
     },
     "T1041": {
       "name": "Exfiltration Over C2 Channel",
@@ -54,6 +54,7 @@
     "DDoS": ["T1498", "T1499"],
     "PortScan": ["T1046"],
     "Botnet": ["T1041"],
-    "Infiltration": ["T1566", "T1190", "T1041", "T1567"]
+    "Infiltration": ["T1566", "T1190", "T1041", "T1567"],
+    "Heartbleed": ["T1190"]
   }
 }

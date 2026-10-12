@@ -99,7 +99,10 @@ def test_notes_put_tags_first_then_summary_and_tags_module_parses_them(_mock):
     notes = _agent().run(TrafficEvent(features=SSH_FLOW)).detector_notes
     assert notes.startswith("[category=DoS] [label=Unknown] Single flow to destination port 22 (SSH)")
     assert tags.parse_category(notes) == "DoS"
-    assert tags.strip_category_tag(notes).startswith("[label=Unknown] Single flow to destination port 22")
+    assert tags.parse_label(notes) == "Unknown"
+    # strip_category_tag now removes every tag (category and label), so the
+    # embedding search only sees the traffic description.
+    assert tags.strip_category_tag(notes).startswith("Single flow to destination port 22")
 
 
 @patch("src.detection.classifier.predict_proba_anomalous", return_value=0.95)
@@ -133,10 +136,18 @@ def test_fields_are_populated_when_the_schema_has_them(_mock):
 
 
 @patch("src.detection.classifier.predict_proba_anomalous", return_value=0.95)
-def test_fields_are_not_invented_when_the_schema_lacks_them(_mock):
+def test_shared_schema_fields_are_populated(_mock):
+    # shared/schemas.py now has these fields, so the real DetectionResult gets them.
     result = _agent().run(TrafficEvent(features=SSH_FLOW))
-    for name in ("attack_label", "attack_category", "category_confidence", "traffic_summary"):
-        assert not hasattr(result, name)
+    assert (result.attack_label, result.attack_category) == ("Unknown", "DoS")
+    assert result.category_confidence == pytest.approx(0.93)
+    assert result.traffic_summary.startswith("Single flow to destination port 22 (SSH)")
+
+
+@patch("src.detection.classifier.predict_proba_anomalous", return_value=0.05)
+def test_shared_schema_fields_stay_empty_for_benign_traffic(_mock):
+    result = _agent().run(TrafficEvent(features=SSH_FLOW))
+    assert (result.attack_label, result.attack_category, result.traffic_summary) == (None, None, None)
 
 
 # --- recheck --------------------------------------------------------------------------
