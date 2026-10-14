@@ -7,7 +7,7 @@ It uses the best evidence available, in this order:
                          both managers agreeing there is no threat.
   2. [category=X] tag -> look X up in the playbook's category_techniques.
                          Detection only names a category when its category model
-                         is at least 0.9 sure; below that it says "Unknown".
+                         is at least 0.8 sure; below that it says "Unknown".
   3. Unknown / no tag -> embedding search of the catalog with Detection's notes,
                          one retry with a query rephrased from the event itself,
                          then "no confident match" if still below the threshold.
@@ -34,7 +34,7 @@ CONFIDENCE_THRESHOLD = MITIGATION_MIN_CONFIDENCE
 # Confidence reported for a category lookup. Detection only names a category when
 # its category model is at least this sure (DEFAULT_CATEGORY_CONFIDENCE_THRESHOLD
 # in src/detection/subagent.py), and the category -> technique mapping is fixed.
-CATEGORY_MATCH_CONFIDENCE = 0.9
+CATEGORY_MATCH_CONFIDENCE = 0.8
 
 # Lets the retry describe the traffic in words the catalog uses.
 SERVICE_BY_PORT = {
