@@ -54,7 +54,7 @@
     "DDoS": ["T1498", "T1499"],
     "PortScan": ["T1046"],
     "Botnet": ["T1041"],
-    "Infiltration": ["T1566", "T1190", "T1041", "T1567"],
+    "Infiltration": ["T1190", "T1566", "T1041", "T1567"],
     "Heartbleed": ["T1190"]
   }
 }
