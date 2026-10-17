@@ -247,6 +247,7 @@ class MitigationAgentLoop:
         self.candidates: List[str] = list(CATEGORY_TECHNIQUES.get(self.category, [])) if self.category else []
         self.search_scores: Dict[str, float] = {}   # technique id -> best search_catalog score
         self.evidence_seen = False
+        self.calls_made = set()
         self.usage = {"model": config.model, "llm_calls": 0, "iterations": 0, "prompt_tokens": 0,
                       "completion_tokens": 0, "llm_latency_ms": 0.0, "invalid_replies": 0,
                       "recovered_replies": 0}
@@ -311,10 +312,19 @@ class MitigationAgentLoop:
 
     #rules enforced in code@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
+    @staticmethod
+    def _call_key(step: Step):
+        query = step.query.lower() if step.query else None
+        return (step.action, step.technique_id, query)
+
     def _check_preconditions(self, step: Step) -> None:
         if step.action in FINAL_ACTIONS and not self.evidence_seen:
             raise llm.LLMOutputError("no_evidence", f"call {GET_EVIDENCE} before {step.action}")
-
+        if step.action in TOOL_ACTIONS and self._call_key(step) in self.calls_made:
+            raise llm.LLMOutputError(
+                "repeated_call",
+                f"you already called {step.action} with the same input and its result is in the "
+                f"conversation above. Do not repeat it: use a different tool or input, or give a final answer")
     def _confidence_for(self, technique_id: str):
         """Confidence comes from the evidence for the FIRST chosen technique (the one whose
         action is proposed); the LLM never sets it. Returns (confidence, source)."""
@@ -369,6 +379,7 @@ class MitigationAgentLoop:
                                     dict(self.usage))
 
             result = self._run_tool(step)
+            self.calls_made.add(self._call_key(step))
             tool_input = {k: v for k, v in (("technique_id", step.technique_id), ("query", step.query)) if v}
             self.log_step(thought=step.thought, action=step.action, tool_input=tool_input or None,
                           observation=_clip(result))
