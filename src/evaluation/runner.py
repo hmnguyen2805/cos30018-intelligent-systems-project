@@ -79,8 +79,8 @@ def _detection_for(task: EvalTask):
 
 def _mitigation_for(task: EvalTask):
     if task.mitigation == "real":
-        from src.correlation.manager import MitigationManager
-        return MitigationManager()
+        from src.correlation.manager import mitigation_from_env
+        return mitigation_from_env()
     return ScriptedMitigation(task.mitigation)
 
 

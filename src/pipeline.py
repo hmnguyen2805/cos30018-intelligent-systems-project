@@ -149,10 +149,10 @@ def build_default_pipeline() -> Pipeline:
     The Judge's mode comes from JUDGE_MODE (rules | single_shot | agent;
     default rules), see src/response/agent.py.
     """
-    from src.correlation.manager import MitigationManager
+    from src.correlation.manager import mitigation_from_env
     from src.detection.manager import DetectionManager
     from src.response.agent import judge_from_env
 
     return Pipeline(
-        detection_manager=DetectionManager(), judge=judge_from_env(), mitigation_manager=MitigationManager()
+        detection_manager=DetectionManager(), judge=judge_from_env(), mitigation_manager=mitigation_from_env()
     )

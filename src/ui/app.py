@@ -27,7 +27,7 @@ from dataclasses import asdict, replace
 from functools import lru_cache
 from typing import Any, Callable, Dict, List, Optional
 
-from src.correlation.manager import MitigationManager
+from src.correlation.manager import mitigation_from_env
 from src.pipeline import Pipeline
 from src.response.agent import MODES, MODE_RULES, JudgeAgent
 from src.response.llm import LLMConfig
@@ -91,9 +91,9 @@ def build_pipeline(source: str, scenario_title: str, mode: str, model: Optional[
     judge = make_judge(mode, model)
     if source == SOURCE_DEMO:
         scenario = SCENARIOS[scenario_title]
-        mitigation = FailingMitigationManager() if scenario.mitigation_fails else MitigationManager()
+        mitigation = FailingMitigationManager() if scenario.mitigation_fails else mitigation_from_env()
         return Pipeline(ScriptedDetectionManager(scenario), judge, mitigation, on_stage=on_stage)
-    return Pipeline(_LazyDetectionManager(), judge, MitigationManager(), on_stage=on_stage)
+    return Pipeline(_LazyDetectionManager(), judge, mitigation_from_env(), on_stage=on_stage)
 
 
 def parse_features(text: str) -> Dict[str, float]:
