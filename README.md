@@ -30,7 +30,6 @@ python -m venv .venv
 # Windows: .venv\Scripts\activate      macOS/Linux: source .venv/bin/activate
 
 pip install -r requirements.txt                              # core: pipeline, Judge, UI, tests
-pip install -r src/detection/requirements-detection.txt      # Detection: training + optional LLM layer
 pip install -r src/correlation/requirements-correlation.txt  # optional: embedding search for "Unknown" categories (pulls in torch)
 ```
 
@@ -47,7 +46,9 @@ Never commit `.env`.
 ## Train the detection models
 
 Needed for real traffic (not for the tests or the UI's demo scenarios). Downloads
-CICIDS2017 from Kaggle via `kagglehub` and writes the models to `models/` (gitignored):
+CICIDS2017 from Kaggle via `kagglehub` (no Kaggle account needed, about 230 MB, under a
+minute on a fast connection) and writes the models to `models/` (gitignored). Training
+both models takes about 5 minutes on a CPU:
 
 ```sh
 python -m src.detection.train

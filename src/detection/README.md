@@ -63,7 +63,7 @@ see [docs/evaluation.md](docs/evaluation.md).
 
 **What `model_disagreement` means:** the specific case above — the category
 model's top vote was `Benign` while the binary model called the event
-anomalous. Logged as its own trace step and, in `evaluate.py`'s CSV output,
+anomalous. Logged as its own trace step and, in `evaluation/evaluate.py`'s CSV output,
 as a `model_disagreement` boolean column. See
 [docs/architecture.md](docs/architecture.md#category-decision-a-deterministic-tool-not-the-llm)
 for the full decision logic, and
@@ -107,7 +107,7 @@ and with `recheck_reason="Mitigation disagrees: playbook suggests port-scan resp
 
 ```sh
 # install
-pip install -r src/detection/requirements-detection.txt
+pip install -r requirements.txt   # from the repo root; Detection's dependencies are in the root requirements.txt
 
 # train both models (binary + category) — writes to models/, gitignored
 python -m src.detection.train
