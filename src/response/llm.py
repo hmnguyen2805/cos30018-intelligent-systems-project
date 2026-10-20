@@ -102,16 +102,26 @@ RECHECK_MANAGERS = ("detection", "mitigation")
 MAX_RECHECK_REASON_CHARS = 200
 
 
-def agent_step_schema(allow_recheck: bool = False) -> dict:
+def _final_action_property(final_actions: Sequence[str] = ()) -> dict:
+    """final_action as an enum of this case's allowed actions, so the model
+    can't invent one. With no list given it stays a free string (the parser
+    still rejects anything not allowed)."""
+    if final_actions:
+        return {"type": "string", "enum": list(final_actions)}
+    return {"type": "string"}
+
+
+def agent_step_schema(allow_recheck: bool = False, final_actions: Sequence[str] = ()) -> dict:
     """The JSON shape of one agent turn. request_recheck (with "manager" and
-    "reason") is only offered when a recheck is still available, so the model
+    "reason") is only offered when a recheck is still available, and
+    final_action is limited to the allowed final actions, so the model
     can't pick an action it isn't allowed to take."""
     actions = list(AGENT_ACTIONS) + ([REQUEST_RECHECK] if allow_recheck else [])
     properties = {
         "thought": {"type": "string", "maxLength": 200},
         "action": {"type": "string", "enum": actions},
         "technique_id": {"type": "string"},
-        "final_action": {"type": "string"},
+        "final_action": _final_action_property(final_actions),
         "reasoning": {"type": "string", "maxLength": 300},
     }
     if allow_recheck:
@@ -122,15 +132,22 @@ def agent_step_schema(allow_recheck: bool = False) -> dict:
 
 AGENT_STEP_SCHEMA = agent_step_schema(allow_recheck=False)
 
-SINGLE_SHOT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "decision": {"type": "string", "enum": [FINALIZE, ESCALATE]},
-        "final_action": {"type": "string"},
-        "reasoning": {"type": "string", "maxLength": 300},
-    },
-    "required": ["decision", "reasoning"],
-}
+
+def single_shot_schema(final_actions: Sequence[str] = ()) -> dict:
+    """The JSON shape of the single-shot decision, with final_action limited
+    to the allowed final actions."""
+    return {
+        "type": "object",
+        "properties": {
+            "decision": {"type": "string", "enum": [FINALIZE, ESCALATE]},
+            "final_action": _final_action_property(final_actions),
+            "reasoning": {"type": "string", "maxLength": 300},
+        },
+        "required": ["decision", "reasoning"],
+    }
+
+
+SINGLE_SHOT_SCHEMA = single_shot_schema()
 
 # --- prompts -------------------------------------------------------------------
 
