@@ -265,6 +265,39 @@ def test_no_recheck_text_on_a_normal_run():
     assert "RECHECK" not in first_message(llm)
 
 
+def test_recheck_tells_the_llm_what_the_first_pass_chose():
+    d = detection()
+    # two ids, best first: only the first is acted on, so only it is named in the recheck
+    llm = ScriptedLLM(EVIDENCE, choose("T1190", "T1566"), EVIDENCE, choose("T1566"))
+    m = manager(llm)
+    m.run(d)
+    first_pass_calls = len(llm.calls)
+    m.run(d, recheck_reason="Category does not fit the matched technique.")
+
+    recheck_first_message = llm.calls[first_pass_calls]["messages"][1]["content"]
+    assert "Your first pass chose: T1190." in recheck_first_message
+
+
+def test_recheck_remembers_the_rules_answer_when_the_first_pass_fell_back():
+    d = detection()
+    llm = ScriptedLLM(ConnectionError("ollama is not running"), EVIDENCE, choose("T1566"))
+    m = manager(llm)
+    first = m.run(d)  # the LLM fails, so the rules path decides
+    rules_choice = first.correlation.matched_technique_ids[0]
+    m.run(d, recheck_reason="Category does not fit the matched technique.")
+
+    assert f"Your first pass chose: {rules_choice}." in llm.calls[1]["messages"][1]["content"]
+
+
+def test_recheck_of_a_different_detection_does_not_reuse_the_first_choice():
+    llm = ScriptedLLM(EVIDENCE, choose("T1190"), EVIDENCE, choose("T1566"))
+    m = manager(llm)
+    m.run(detection())
+    m.run(detection(), recheck_reason="Category does not fit the matched technique.")  # a new DetectionResult
+
+    assert "first pass chose" not in llm.calls[2]["messages"][1]["content"]
+
+
 # --- confidence comes from the evidence -----------------------------------------------------
 
 def test_confidence_is_capped_outside_the_category_without_search_evidence():
@@ -329,6 +362,32 @@ def test_no_match_gives_the_no_match_action_and_zero_confidence():
     result = manager(llm).run(detection())
     assert result.correlation.matched_technique_ids == []
     assert result.proposed_action == NO_MATCH_ACTION and result.confidence == 0.0
+
+
+class BrokenEncoder:
+    """Fake embedding model that crashes, to test a tool failing inside the agent loop."""
+
+    def encode(self, text):
+        raise RuntimeError("encoder crashed")
+
+
+def test_a_tool_crash_becomes_an_error_observation_and_the_run_continues():
+    llm = ScriptedLLM(EVIDENCE, step("search_catalog", query="login"), choose("T1190"))
+    result = manager(llm, subagent=CorrelationSubagent(encoder=BrokenEncoder())).run(detection())
+
+    assert "fallback_to_rules" not in actions(result)  # the run was not abandoned
+    assert result.correlation.matched_technique_ids == ["T1190"]
+    assert any("search_catalog failed" in m["content"] for m in llm.calls[-1]["messages"])  # the LLM was told
+    crashed = next(s for s in result.trace if s.action == "search_catalog")
+    assert "RuntimeError" in crashed.observation
+
+
+def test_more_than_four_technique_ids_are_cut_to_four():
+    ids = list(TECHNIQUE_CATALOG)[:5]
+    assert len(ids) == 5
+    result = manager(ScriptedLLM(EVIDENCE, choose(*ids))).run(detection())
+
+    assert result.correlation.matched_technique_ids == ids[:4]
 
 
 # --- modes and configuration ---------------------------------------------------------------
