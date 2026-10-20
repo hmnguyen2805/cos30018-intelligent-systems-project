@@ -17,7 +17,7 @@ Two modes with the same input and output:
 Benign traffic never reaches the LLM in either mode.
 """
 import os
-from typing import Optional
+from typing import List, Optional
 
 from src.correlation import agent_loop
 from src.correlation.subagent import CorrelationSubagent
@@ -60,6 +60,7 @@ class MitigationManager(BaseAgent):
         self._config = config
         self._llm_client = llm_client
         self.last_usage: dict = {}   # LLM calls/tokens/latency of the latest agent run (evaluation)
+        self._last_choice = None     # (detection, [technique acted on]) of the latest run, so a recheck can name the first answer
 
     @property
     def config(self) -> llm.LLMConfig:
@@ -74,6 +75,19 @@ class MitigationManager(BaseAgent):
         return self._llm_client
 
     def run(self, input_data: DetectionResult, recheck_reason: Optional[str] = None) -> MitigationRecommendation:
+        """Decide a technique and action for one DetectionResult (see _decide). The manager
+        remembers what it chose, so a recheck of the same detection can tell the LLM what the
+        first pass answered."""
+        previous_ids = None
+        if recheck_reason and self._last_choice and self._last_choice[0] is input_data:
+            previous_ids = self._last_choice[1] or None
+        result = self._decide(input_data, recheck_reason, previous_ids)
+        # Only the first technique is acted on (its action is the one proposed); the rest are just candidates.
+        self._last_choice = (input_data, list(result.correlation.matched_technique_ids)[:1])
+        return result
+
+    def _decide(self, input_data: DetectionResult, recheck_reason: Optional[str],
+                previous_ids: Optional[List[str]]) -> MitigationRecommendation:
         """recheck_reason is set when the Judge sends the case back ("look
         again, because ..."). It is recorded in the trace in both modes. In agent
         mode it is also put in the LLM's first message, together with an instruction
@@ -91,7 +105,7 @@ class MitigationManager(BaseAgent):
 
         if self.mode == MODE_AGENT and input_data.is_anomalous:  # benign traffic skips the LLM
             try:
-                return self._run_agent(input_data, recheck_reason)
+                return self._run_agent(input_data, recheck_reason, previous_ids)
             except agent_loop.MitigationFallback as fallback:
                 self.last_usage = {"fallback_reason": fallback.reason, **self.last_usage}
                 self.log_step(
@@ -131,10 +145,12 @@ class MitigationManager(BaseAgent):
 
     # --- agent mode ------------------------------------------------------------
 
-    def _run_agent(self, input_data: DetectionResult, recheck_reason: Optional[str]) -> MitigationRecommendation:
+    def _run_agent(self, input_data: DetectionResult, recheck_reason: Optional[str],
+                   previous_ids: Optional[List[str]] = None) -> MitigationRecommendation:
         loop = agent_loop.MitigationAgentLoop(
             detection=input_data, subagent=self._subagent, llm_client=self.llm_client,
             config=self.config, log_step=self.log_step, recheck_reason=recheck_reason,
+            previous_ids=previous_ids,
         )
         try:
             outcome = loop.run()

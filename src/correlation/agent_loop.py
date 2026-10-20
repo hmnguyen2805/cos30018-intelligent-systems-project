@@ -134,16 +134,17 @@ TASK_MESSAGE = "A new anomalous event needs a technique match. Start by calling 
 
 RECHECK_MESSAGE = (
     "A new anomalous event needs a technique match. This is a RECHECK: the Judge sent the case back "
-    "for a second look.\nJudge's reason: {reason}\n"
+    "for a second look.\nJudge's reason: {reason}\n{previous}"
     "Try something different from the first pass: for example search the catalog with the traffic "
     "summary, or consider the other candidate techniques instead of the first one. "
     "Start by calling get_detection_evidence."
 )
 
 
-def first_message(recheck_reason: Optional[str]) -> Dict[str, str]:
+def first_message(recheck_reason: Optional[str], previous_ids: Optional[List[str]] = None) -> Dict[str, str]:
     if recheck_reason:
-        return {"role": "user", "content": RECHECK_MESSAGE.format(reason=recheck_reason)}
+        previous = f"Your first pass chose: {', '.join(previous_ids)}.\n" if previous_ids else ""
+        return {"role": "user", "content": RECHECK_MESSAGE.format(reason=recheck_reason, previous=previous)}
     return {"role": "user", "content": TASK_MESSAGE}
 
 
@@ -208,7 +209,7 @@ def parse_step(raw: str) -> Step:
             raise llm.LLMOutputError(
                 "unknown_technique",
                 f"{unknown} are not techniques in the catalog; valid ids are {list(TECHNIQUE_CATALOG)}")
-        return Step(thought, action, technique_ids=list(dict.fromkeys(ids)), reasoning=reasoning)
+        return Step(thought, action, technique_ids=list(dict.fromkeys(ids))[:4], reasoning=reasoning)
 
     if action == NO_MATCH:
         return Step(thought, action, reasoning=reasoning)
@@ -235,8 +236,9 @@ class MitigationAgentLoop:
 
     def __init__(self, detection: DetectionResult, subagent, llm_client: llm.LLMClient,
                  config: llm.LLMConfig, log_step: Callable[..., None],
-                 recheck_reason: Optional[str] = None):
+                 recheck_reason: Optional[str] = None, previous_ids: Optional[List[str]] = None):
         self.detection = detection
+        self.previous_ids = previous_ids
         self.subagent = subagent
         self.llm_client = llm_client
         self.config = config
@@ -340,7 +342,7 @@ class MitigationAgentLoop:
     def run(self) -> AgentOutcome:
         messages: List[Dict[str, str]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            first_message(self.recheck_reason),
+            first_message(self.recheck_reason, self.previous_ids),
         ]
         consecutive_invalid = 0
 
@@ -378,7 +380,10 @@ class MitigationAgentLoop:
                 return AgentOutcome(step.technique_ids, confidence, step.reasoning or "", source,
                                     dict(self.usage))
 
-            result = self._run_tool(step)
+            try:
+                result = self._run_tool(step)
+            except Exception as exc:  # a tool crashed: tell the LLM instead of failing the whole stage
+                result = {"error": f"{step.action} failed: {type(exc).__name__}: {exc}"}
             self.calls_made.add(self._call_key(step))
             tool_input = {k: v for k, v in (("technique_id", step.technique_id), ("query", step.query)) if v}
             self.log_step(thought=step.thought, action=step.action, tool_input=tool_input or None,

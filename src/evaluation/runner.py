@@ -58,6 +58,11 @@ class RunRecord:
     fallback_reason: Optional[str] = None
     tool_steps: int = 0                  # agent mode only: tool calls the LLM chose
     tool_ok: int = 0                     # ... and how many returned a usable result
+    mitigation_mode: str = ""            # "rules" | "agent" for the real Mitigation Manager, "scripted" for a scripted one
+    mit_llm_calls: int = 0               # Mitigation agent LLM usage over all its runs in this case (a recheck is a second run)
+    mit_tokens: int = 0
+    mit_llm_latency_ms: float = 0.0
+    mit_fallback_reason: Optional[str] = None   # why the Mitigation agent fell back to its rules, if it did
     errors: Dict[str, str] = field(default_factory=dict)
     skip_reason: Optional[str] = None
     trace: List[Dict[str, Any]] = field(default_factory=list)
@@ -77,11 +82,35 @@ def _detection_for(task: EvalTask):
     return ScriptedDetection(task.detection)
 
 
+class MitigationUsage:
+    """Wraps a Mitigation Manager and adds up its LLM usage over every run() call. The manager's
+    last_usage only keeps the latest run, so without this a Judge recheck (a second Mitigation
+    run) would hide the first run's tokens. A scripted manager has no usage and adds nothing."""
+
+    def __init__(self, manager):
+        self.manager = manager
+        self.mode = getattr(manager, "mode", "scripted")
+        self.llm_calls = 0
+        self.tokens = 0
+        self.llm_latency_ms = 0.0
+        self.fallback_reason: Optional[str] = None
+
+    def run(self, *args, **kwargs):
+        try:
+            return self.manager.run(*args, **kwargs)
+        finally:
+            usage = getattr(self.manager, "last_usage", None) or {}
+            self.llm_calls += usage.get("llm_calls", 0)
+            self.tokens += usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0)
+            self.llm_latency_ms += usage.get("llm_latency_ms", 0.0)
+            self.fallback_reason = self.fallback_reason or usage.get("fallback_reason")
+
+
 def _mitigation_for(task: EvalTask):
     if task.mitigation == "real":
         from src.correlation.manager import mitigation_from_env
-        return mitigation_from_env()
-    return ScriptedMitigation(task.mitigation)
+        return MitigationUsage(mitigation_from_env())
+    return MitigationUsage(ScriptedMitigation(task.mitigation))
 
 
 def build_pipeline(task: EvalTask, judge: JudgeAgent) -> Pipeline:
@@ -131,7 +160,8 @@ def _trace_rows(run: PipelineRun) -> List[Dict[str, Any]]:
     return rows
 
 
-def record_from_run(task: EvalTask, mode: str, repeat: int, run: PipelineRun, keep_trace: bool) -> RunRecord:
+def record_from_run(task: EvalTask, mode: str, repeat: int, run: PipelineRun, keep_trace: bool,
+                    mitigation: Optional[MitigationUsage] = None) -> RunRecord:
     record = RunRecord(task_id=task.id, difficulty=task.difficulty, split=task.split, mode=mode,
                        repeat=repeat, expected=list(task.expected))
     record.outcome = classify_outcome(run)
@@ -139,6 +169,12 @@ def record_from_run(task: EvalTask, mode: str, repeat: int, run: PipelineRun, ke
     record.total_ms = sum(v for k, v in run.timings_ms.items() if not k.startswith("recheck_"))
     if run.mitigation is not None and run.mitigation.correlation.matched_technique_ids:
         record.technique = run.mitigation.correlation.matched_technique_ids[0]
+    if mitigation is not None:
+        record.mitigation_mode = mitigation.mode
+        record.mit_llm_calls = mitigation.llm_calls
+        record.mit_tokens = mitigation.tokens
+        record.mit_llm_latency_ms = mitigation.llm_latency_ms
+        record.mit_fallback_reason = mitigation.fallback_reason
 
     r = run.response
     if r is not None:
@@ -175,7 +211,7 @@ def run_task(task: EvalTask, mode: str, repeat: int = 0, config: Optional[LLMCon
                          repeat=repeat, expected=list(task.expected), outcome="skipped",
                          skip_reason=f"{type(exc).__name__}: {exc}")
     run = pipeline.run(event_for(task))
-    return record_from_run(task, mode, repeat, run, keep_trace)
+    return record_from_run(task, mode, repeat, run, keep_trace, pipeline.mitigation_manager)
 
 
 def run_evaluation(tasks: Sequence[EvalTask], modes: Sequence[str] = MODES, repeats: int = 3,

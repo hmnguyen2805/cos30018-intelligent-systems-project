@@ -9,11 +9,17 @@ from pathlib import Path
 
 import pytest
 
+from src.correlation.manager import MitigationManager
+from src.correlation.subagent import CorrelationSubagent
 from src.evaluation import runner
 from src.evaluation.report import summary_markdown, write_results
-from src.evaluation.runner import RunRecord, run_evaluation, run_task, score
-from src.evaluation.tasks import DIFFICULTIES, EvalTask, load_tasks, task_from_dict
+from src.evaluation.runner import MitigationUsage, RunRecord, run_evaluation, run_task, score
+from src.evaluation.tasks import DIFFICULTIES, EvalTask, ScriptedMitigation, load_tasks, task_from_dict
+from src.response.llm import LLMConfig
 from tests.test_judge_llm import CHECK, COMPARE, ScriptedLLM, step
+from tests.test_mitigation_llm import EVIDENCE, choose
+from tests.test_mitigation_llm import ScriptedLLM as MitigationScriptedLLM
+from tests.test_mitigation_llm import detection as make_detection
 
 DEV_TASKS = Path(__file__).resolve().parents[1] / "evaluation" / "tasks" / "dev_tasks.json"
 
@@ -124,6 +130,57 @@ def test_llm_failure_falls_back_to_the_rules(tasks):
     assert record.fallback_reason.startswith("llm_error")
 
 
+class FakeUsageManager:
+    """Stands in for a Mitigation Manager: every run() leaves 2 LLM calls (120 tokens) in last_usage."""
+    mode = "agent"
+
+    def __init__(self):
+        self.last_usage = {}
+
+    def run(self, input_data, recheck_reason=None):
+        self.last_usage = {"llm_calls": 2, "prompt_tokens": 100, "completion_tokens": 20, "llm_latency_ms": 50.0}
+        if recheck_reason:
+            self.last_usage["fallback_reason"] = "max_steps"
+        return "result"
+
+
+def test_mitigation_usage_adds_up_every_run_including_a_recheck():
+    tracker = MitigationUsage(FakeUsageManager())
+    assert tracker.run("detection") == "result"
+    tracker.run("detection", recheck_reason="Category does not fit the matched technique.")
+
+    assert (tracker.llm_calls, tracker.tokens, tracker.llm_latency_ms) == (4, 240, 100.0)
+    assert tracker.fallback_reason == "max_steps"
+
+
+def test_scripted_mitigation_reports_no_usage():
+    tracker = MitigationUsage(ScriptedMitigation({"techniques": ["T1190"], "confidence": 0.9}))
+    tracker.run(make_detection())
+
+    assert tracker.mode == "scripted"
+    assert (tracker.llm_calls, tracker.tokens, tracker.llm_latency_ms, tracker.fallback_reason) == (0, 0, 0.0, None)
+
+
+def test_mitigation_agent_usage_lands_in_the_run_record(tasks, monkeypatch):
+    mitigation_llm = MitigationScriptedLLM(EVIDENCE, choose("T1190"))
+    agent = MitigationManager(subagent=CorrelationSubagent(), mode="agent", llm_client=mitigation_llm,
+                              config=LLMConfig())
+    monkeypatch.setattr("src.correlation.manager.mitigation_from_env", lambda: agent)
+    record = run_task(tasks["D05"], "rules")
+
+    assert record.mitigation_mode == "agent" and record.technique == "T1190"
+    assert (record.mit_llm_calls, record.mit_tokens, record.mit_llm_latency_ms) == (2, 240, 100.0)
+    assert record.tokens == 0  # the Judge ran in rules mode, so only Mitigation used the LLM
+
+
+def test_rules_mode_mitigation_records_its_mode_and_no_llm_usage(tasks, monkeypatch):
+    monkeypatch.delenv("MITIGATION_MODE", raising=False)
+    record = run_task(tasks["D05"], "rules")
+
+    assert record.mitigation_mode == "rules"
+    assert (record.mit_llm_calls, record.mit_tokens, record.mit_fallback_reason) == (0, 0, None)
+
+
 def test_missing_trained_model_skips_real_detection_tasks(monkeypatch):
     def no_model():
         raise FileNotFoundError("No trained model")
@@ -150,6 +207,25 @@ def test_report_files(tasks, tmp_path):
     for heading in ("Metrics per Judge mode", "Success by difficulty", "Per task", "Tasks where the modes differ"):
         assert heading in summary
     assert "| D01 |" in summary
+
+
+def test_summary_and_csv_include_the_mitigation_columns(tasks, tmp_path):
+    rules_only = run_evaluation([tasks["D05"]], modes=["rules"], keep_trace=False)
+    summary = summary_markdown(rules_only)
+    assert "| Mitigation agent runs | 0/1 (0%) |" in summary
+    assert "| Mitigation avg tokens | - |" in summary
+
+    agent_run = RunRecord(task_id="X1", difficulty="simple", split="dev", mode="agent", repeat=0, expected=["act"],
+                          outcome="act", correct=True, tokens=700, mitigation_mode="agent",
+                          mit_llm_calls=2, mit_tokens=300, mit_llm_latency_ms=4000.0)
+    summary = summary_markdown([agent_run])
+    assert "| Mitigation avg tokens | 300 |" in summary
+    assert "| avg tokens (Judge + Mitigation) | 1000 |" in summary
+
+    paths = write_results([agent_run], tmp_path)
+    with open(paths["csv"], newline="") as f:
+        header = next(csv.reader(f))
+    assert {"mitigation_mode", "mit_llm_calls", "mit_tokens", "mit_llm_latency_ms", "mit_fallback_reason"} <= set(header)
 
 
 def test_summary_counts_success(tasks):

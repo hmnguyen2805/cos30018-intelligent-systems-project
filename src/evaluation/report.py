@@ -32,7 +32,8 @@ from src.evaluation.tasks import DIFFICULTIES
 CSV_FIELDS = ["task_id", "difficulty", "split", "mode", "repeat", "expected", "outcome", "correct", "unsafe",
               "over_cautious", "wrong_technique", "case", "decided_by", "technique", "recommended_action",
               "rechecks", "iterations", "llm_calls", "tokens", "llm_latency_ms", "total_ms",
-              "invalid_replies", "recovered_replies", "fallback_reason", "tool_steps", "tool_ok", "errors"]
+              "invalid_replies", "recovered_replies", "fallback_reason", "tool_steps", "tool_ok",
+              "mitigation_mode", "mit_llm_calls", "mit_tokens", "mit_llm_latency_ms", "mit_fallback_reason", "errors"]
 
 
 def _rate(part: int, whole: int) -> str:
@@ -57,6 +58,7 @@ def by_mode(records: Sequence[RunRecord]) -> Dict[str, List[RunRecord]]:
 def mode_metrics(rs: List[RunRecord]) -> Dict[str, str]:
     n = len(rs)
     invalid = sum(r.invalid_replies for r in rs)
+    mit = [r for r in rs if r.mitigation_mode == "agent"]  # runs where Mitigation used its LLM agent
     tool_steps = sum(r.tool_steps for r in rs)
     per_task = defaultdict(set)
     for r in rs:
@@ -73,6 +75,12 @@ def mode_metrics(rs: List[RunRecord]) -> Dict[str, str]:
         "avg tokens": _avg([r.tokens for r in rs], 0),
         "avg LLM latency (s)": _avg([r.llm_latency_ms / 1000 for r in rs], 2),
         "avg total latency (s)": _avg([r.total_ms / 1000 for r in rs], 2),
+        "Mitigation agent runs": _rate(len(mit), n),
+        "Mitigation avg LLM calls": _avg([r.mit_llm_calls for r in mit]),
+        "Mitigation avg tokens": _avg([r.mit_tokens for r in mit], 0),
+        "Mitigation avg LLM latency (s)": _avg([r.mit_llm_latency_ms / 1000 for r in mit], 2),
+        "Mitigation fallback rate": _rate(sum(bool(r.mit_fallback_reason) for r in mit), len(mit)) if mit else "-",
+        "avg tokens (Judge + Mitigation)": _avg([r.tokens + r.mit_tokens for r in rs], 0),
         "tool-use success": _rate(sum(r.tool_ok for r in rs), tool_steps) if tool_steps else "-",
         "fallback rate": _rate(sum(r.decided_by == "rules_fallback" for r in rs), n),
         "recovery rate": _rate(sum(r.recovered_replies for r in rs), invalid) if invalid else "-",
