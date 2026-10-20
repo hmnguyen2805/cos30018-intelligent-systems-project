@@ -229,11 +229,11 @@
     "id": "D05",
     "difficulty": "difficult",
     "split": "dev",
-    "description": "Infiltration: the playbook's first technique is phishing, whose action (quarantine a message) doesn't fit a compromised host",
+    "description": "Infiltration on an unusual port: the playbook now leads with T1190 (exploit a public-facing application), so acting fits; escalating a possible infiltration is also acceptable",
     "features": {"Destination Port": 444.0, "Flow Duration": 1000000.0},
     "detection": {"anomalous": true, "confidence": 0.9, "category": "Infiltration", "label": "Infiltration", "category_confidence": 0.85, "summary": "Single flow to destination port 444: duration 300.0 s, forward packets 50."},
     "mitigation": "real",
-    "expected": ["escalate"],
+    "expected": ["act", "escalate"],
     "true_category": "Infiltration"
   },
   {
