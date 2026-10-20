@@ -60,7 +60,7 @@ class MitigationManager(BaseAgent):
         self._config = config
         self._llm_client = llm_client
         self.last_usage: dict = {}   # LLM calls/tokens/latency of the latest agent run (evaluation)
-        self._last_choice = None     # (detection, technique ids) of the latest run, so a recheck can name the first answer
+        self._last_choice = None     # (detection, [technique acted on]) of the latest run, so a recheck can name the first answer
 
     @property
     def config(self) -> llm.LLMConfig:
@@ -82,7 +82,8 @@ class MitigationManager(BaseAgent):
         if recheck_reason and self._last_choice and self._last_choice[0] is input_data:
             previous_ids = self._last_choice[1] or None
         result = self._decide(input_data, recheck_reason, previous_ids)
-        self._last_choice = (input_data, list(result.correlation.matched_technique_ids))
+        # Only the first technique is acted on (its action is the one proposed); the rest are just candidates.
+        self._last_choice = (input_data, list(result.correlation.matched_technique_ids)[:1])
         return result
 
     def _decide(self, input_data: DetectionResult, recheck_reason: Optional[str],
