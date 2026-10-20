@@ -33,7 +33,6 @@ Configuration (environment variables, all optional):
     MITIGATION_LLM_MAX_TOKENS  max output tokens per call (default: 400)
 """
 import json
-import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
@@ -43,9 +42,7 @@ from src.response import llm
 from src.shared.schemas import DetectionResult, JudgeInput
 from src.shared.tags import parse_category, strip_tags
 
-logger = logging.getLogger(__name__)
-
-#actions@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+# --- actions ---
 
 GET_EVIDENCE = "get_detection_evidence"
 LIST_CANDIDATES = "list_candidate_techniques"
@@ -78,7 +75,7 @@ def mitigation_llm_config() -> llm.LLMConfig:
         max_steps=int(os.environ.get("MITIGATION_LLM_MAX_STEPS", 6)),
         #and max tokens
         max_tokens=int(os.environ.get("MITIGATION_LLM_MAX_TOKENS", 400)),
-        #from the enviroments variables and returns them as a single object, if it isn't set it uses the defualt
+        #from the environment variables and returns them as a single object, if it isn't set it uses the default
     )
 
 #when an error happens, it stops and jumps out and returns the error
@@ -98,7 +95,7 @@ class AgentOutcome:
     usage: Dict[str, Any] = field(default_factory=dict)
 
 
-#schema and prompts@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+# --- schema and prompts ---
 
 STEP_SCHEMA = {
     "type": "object",
@@ -153,7 +150,7 @@ def invalid_reply_message(reason: str) -> Dict[str, str]:
                                        f"Reply with one JSON object using one of these actions: {', '.join(ALL_ACTIONS)}."}
 
 
-#parsing@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+# --- parsing ---
 
 
 @dataclass(frozen=True)
@@ -217,7 +214,7 @@ def parse_step(raw: str) -> Step:
     return Step(thought, action)  # get_detection_evidence, list_candidate_techniques
 
 
-#the loop@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+# --- the loop ---
 
 
 def _clip(value: Any) -> str:
@@ -254,7 +251,7 @@ class MitigationAgentLoop:
                       "completion_tokens": 0, "llm_latency_ms": 0.0, "invalid_replies": 0,
                       "recovered_replies": 0}
 
-    #tools (read-only)@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+    # --- tools (read-only) ---
 
     def _technique_info(self, technique_id: str) -> dict:
         from src.correlation.manager import ACTION_BY_TECHNIQUE  # lazy: manager imports this module
@@ -312,7 +309,7 @@ class MitigationAgentLoop:
             return self.tool_get_technique(step.technique_id)
         return self.tool_search_catalog(step.query)
 
-    #rules enforced in code@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+    # --- rules enforced in code ---
 
     @staticmethod
     def _call_key(step: Step):
@@ -327,6 +324,7 @@ class MitigationAgentLoop:
                 "repeated_call",
                 f"you already called {step.action} with the same input and its result is in the "
                 f"conversation above. Do not repeat it: use a different tool or input, or give a final answer")
+
     def _confidence_for(self, technique_id: str):
         """Confidence comes from the evidence for the FIRST chosen technique (the one whose
         action is proposed); the LLM never sets it. Returns (confidence, source)."""
@@ -337,7 +335,7 @@ class MitigationAgentLoop:
             return float(self.search_scores[technique_id]), "search"
         return UNSUPPORTED_CONFIDENCE_CAP, "unsupported"
 
-    #the loop@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+    # --- the loop ---
 
     def run(self) -> AgentOutcome:
         messages: List[Dict[str, str]] = [
