@@ -24,7 +24,8 @@ class ScriptedLLM:
         self.calls = []
 
     def __call__(self, messages, schema, schema_name):
-        self.calls.append({"messages": copy.deepcopy(messages), "schema_name": schema_name})
+        self.calls.append({"messages": copy.deepcopy(messages), "schema": copy.deepcopy(schema),
+                           "schema_name": schema_name})
         if not self.replies:
             raise AssertionError("LLM called more times than scripted")
         reply = self.replies.pop(0)
@@ -265,6 +266,21 @@ def test_single_shot_makes_one_call_with_all_evidence():
 def test_single_shot_invalid_reply_falls_back():
     result = judge(MODE_SINGLE_SHOT, ScriptedLLM("nope")).run(case())
     assert result.decided_by == guardrails.DECIDED_BY_FALLBACK
+
+
+# --- final_action is limited to the allowed final actions -------------------------------
+
+def test_agent_schema_limits_final_action_to_the_allowed_actions():
+    llm = ScriptedLLM(COMPARE, CHECK, FINALIZE_BLOCK)
+    judge(MODE_AGENT, llm).run(case())
+    for call in llm.calls:
+        assert call["schema"]["properties"]["final_action"]["enum"] == ["block_source_ip", "no_action"]
+
+
+def test_single_shot_schema_limits_final_action_to_the_allowed_actions():
+    llm = ScriptedLLM({"decision": "finalize", "final_action": "block_source_ip", "reasoning": "consistent"})
+    judge(MODE_SINGLE_SHOT, llm).run(case())
+    assert llm.calls[0]["schema"]["properties"]["final_action"]["enum"] == ["block_source_ip", "no_action"]
 
 
 # --- rules mode and configuration ----------------------------------------------------

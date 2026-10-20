@@ -191,7 +191,8 @@ class JudgeAgent(BaseAgent):
             ctx = self._ctx  # replaced after a recheck
             recheck_managers = ctx.rechecks_available
             self._usage["iterations"] += 1
-            response = self._call_llm(messages, llm.agent_step_schema(bool(recheck_managers)), "judge_step")
+            schema = llm.agent_step_schema(bool(recheck_managers), ctx.allowed_final_actions)
+            response = self._call_llm(messages, schema, "judge_step")
             messages.append({"role": "assistant", "content": response.content})
 
             try:
@@ -302,7 +303,7 @@ class JudgeAgent(BaseAgent):
             llm.single_shot_user_message(evidence),
         ]
         self._usage["iterations"] = 1
-        response = self._call_llm(messages, llm.SINGLE_SHOT_SCHEMA, "judge_decision")
+        response = self._call_llm(messages, llm.single_shot_schema(ctx.allowed_final_actions), "judge_decision")
         try:
             step = llm.parse_single_shot(response.content, ctx.allowed_final_actions)
         except llm.LLMOutputError as err:
