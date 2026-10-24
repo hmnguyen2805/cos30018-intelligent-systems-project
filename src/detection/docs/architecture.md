@@ -12,18 +12,18 @@ troubleshooting, see [llm-layer.md](llm-layer.md). For current metrics, see
 | File | Role |
 |---|---|
 | `manager.py` | `DetectionManager` — owns the contract, delegates |
-| `subagent.py` | `DetectionSubagent` — classifies, handles borderline cases, chooses the attack category, optionally delegates to `llm_layer.py` for an explanation. Reads top-to-bottom as: classify -> tree votes -> category decision -> optional LLM explanation |
-| `llm_layer.py` | `LLMExplanationLayer` — MCP connection, agent/single_shot dispatch, retries, circuit breaker, validation/salvage. Everything `DetectionSubagent` needs to ask an LLM to *explain* an already-made decision, and nothing that decides `is_anomalous`/`confidence`/category |
+| `subagent.py` | `DetectionSubagent` — classifies, handles borderline cases, chooses the attack category, optionally delegates to `llm/layer.py` for an explanation. Reads top-to-bottom as: classify -> tree votes -> category decision -> optional LLM explanation |
+| `llm/layer.py` | `LLMExplanationLayer` — MCP connection, agent/single_shot dispatch, retries, circuit breaker, validation/salvage. Everything `DetectionSubagent` needs to ask an LLM to *explain* an already-made decision, and nothing that decides `is_anomalous`/`confidence`/category |
 | `classifier.py` | Tool layer: load artifacts, predict, per-tree vote spread, `top_features` (feature-importance ranking), `predict_attack_category` |
 | `training/data.py` | Shared loading/cleaning, the ONE train/test split (fixed `random_state`), feature stats, `map_cicids_label_to_category` |
 | `training/train_binary.py` | Binary RandomForest (BENIGN vs anomalous) -> `detection_binary.joblib` |
-| `training/train_category.py` | Multiclass RandomForest (+ a downsampled Benign class), anomalous TRAIN rows -> `detection_category.joblib` |
+| `training/train_category.py` | Multiclass RandomForest on all 15 fine CICIDS2017 labels (attack rows plus a downsampled Benign class) from the TRAIN split -> `detection_category.joblib` |
 | `train.py` | Thin wrapper: runs `train_binary` then `train_category` |
-| `mcp_server.py` | MCP tool server exposing `classifier.py` to the LLM layer |
-| `llm_notes.py` | LLM output schema, system prompt, validation/grounding checks |
-| `evaluate.py` | RF-only vs RF+LLM ablation (sampled) + `--offline` CLI entry |
-| `offline_eval.py` | Batch (no-LLM, whole-test-split) classifier metrics and the `CATEGORY_CONFIDENCE_THRESHOLD` sweep, used by `--offline` |
-| `requirements-detection.txt` | Extra dependencies beyond the shared `requirements.txt` |
+| `llm/tool_server.py` | MCP tool server exposing `classifier.py` to the LLM layer |
+| `llm/notes.py` | LLM output schema, system prompt, validation/grounding checks |
+| `evaluation/evaluate.py` | RF-only vs RF+LLM ablation (sampled) + `--offline` CLI entry |
+| `evaluation/offline.py` | Batch (no-LLM, whole-test-split) classifier metrics and the `CATEGORY_CONFIDENCE_THRESHOLD` sweep, used by `--offline` |
+| `requirements.txt` (repo root) | Detection's dependencies are in the shared root file |
 
 ## Manager/subagent contract
 
@@ -92,10 +92,10 @@ TrafficEvent
                                    generation — often JSON with stray prose around it
                                           |
                                           v
-                                   schema + grounding check (llm_notes.parse_and_validate) —
+                                   schema + grounding check (llm.notes.parse_and_validate) —
                                    {explanation, tools_used} only, no category field to
                                    validate; on invalid JSON, retry once on an extracted
-                                   {...} substring (llm_notes.extract_json_object — "salvaged")
+                                   {...} substring (llm.notes.extract_json_object — "salvaged")
                                     /                  \
                               passes                 fails / times out / errors
                                  |                          |
@@ -114,13 +114,13 @@ Subagent embeds this text to search its technique catalog.
 
 ## The MCP server's role
 
-`mcp_server.py` exposes `classifier.py` as MCP tools; it never decides
+`llm/tool_server.py` exposes `classifier.py` as MCP tools; it never decides
 anything itself — every decision (`is_anomalous`, `confidence`, the chosen
 category) is made in code in `subagent.py` before or independent of any tool
 call. Run it standalone for manual testing:
 
 ```sh
-python -m src.detection.mcp_server
+python -m src.detection.llm.tool_server
 ```
 
 It exposes, over stdio: `register_event`/`clear_event` (code-only — store/
@@ -173,10 +173,10 @@ salvage pipeline in `LLMExplanationLayer._run_llm_layer` — `single_shot` is
 not a way to skip any guardrail, it only changes how the raw JSON gets
 produced. Set via `DETECTION_LLM_MODE=agent|single_shot` in `.env` to force
 one explicitly. Left unset (or an unrecognized value):
-`llm_layer.resolve_llm_mode` defaults to `single_shot` for any
+`llm.layer.resolve_llm_mode` defaults to `single_shot` for any
 `ollama_chat/*` `DETECTION_LLM_MODEL`, `agent` otherwise — since
 `DETECTION_LLM_MODEL` itself defaults to a local Ollama model, the
-out-of-the-box default is `single_shot`. `evaluate.py` records which mode
+out-of-the-box default is `single_shot`. `evaluation/evaluate.py` records which mode
 ran in the `llm_mode` CSV column and prints it alongside the model id at
 startup.
 
@@ -223,7 +223,7 @@ event, whether or not `use_llm` is set):
 4. Otherwise logged as `action="category_decision"`; `tool_input` carries
    `chosen_label`, `chosen_category`, `raw_top_label`,
    `raw_top_label_probability`, `raw_top_category`, `raw_top_probability`
-   (the top *group's* probability) and `threshold`, so `evaluate.py` can
+   (the top *group's* probability) and `threshold`, so `evaluation/evaluate.py` can
    report both the thresholded decision and the raw top-1.
 5. No category model loaded (backward compatibility) → logged as
    `category_model_unavailable`, label and category are both `"Unknown"`.
@@ -278,7 +278,7 @@ error rather than mis-grouped.
 
 The LLM never sees this as something to decide: its task prompt states the
 chosen category and its probability as a *given*, and its JSON schema
-(`llm_notes.ANSWER_JSON_SCHEMA`) has no `category` property at all — only
+(`llm.notes.ANSWER_JSON_SCHEMA`) has no `category` property at all — only
 `{explanation, tools_used}`. A stray `"category"` key in the LLM's raw JSON
 (e.g. a stale cached prompt, or a model that doesn't strictly follow
 schemas) is simply ignored by `parse_and_validate`, not validated or
@@ -290,8 +290,8 @@ already chose before the agent ran.
 
 ## Dependencies
 
-Anything beyond the shared `requirements.txt` is in
-`requirements-detection.txt`: `kagglehub` (dataset download), `joblib`
+Detection's dependencies are in the root `requirements.txt`:
+`kagglehub` (dataset download), `joblib`
 (artifact save/load), and, for the optional LLM layer, `mcp` (MCP server;
 pinned `<2` — its FastMCP API was renamed in mcp 2.x), `smolagents[mcp]`
 (MCPClient + ToolCallingAgent), `litellm` (model backend, via
