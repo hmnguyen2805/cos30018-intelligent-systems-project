@@ -33,6 +33,7 @@ Results folder: `evaluation/results/20261013-023242` (69 tasks: 33 dev + 36 unse
 Tasks where the modes differ: D01 to D04 (rules 0%, both LLM modes 100%), E04 (single_shot 100%, rules and agent 0%), U-SSH-Patator-2 (agent 0%, others 100%).
 
 Notes:
+- The 12 agent-mode fallbacks come from 4 tasks, each across all 3 repeats: M02 and U-DoSGoldenEye-2 (invalid final action), E04 and E05 (step limit).
 - An earlier full run (`20261012-235015`) is invalid: `qwen2.5:3b` was not installed, so 99% of LLM runs fell back to the rule table (`NotFoundError`). It should not be used or committed.
 - U-SSH-Patator-2 in agent mode is a Judge-side issue: Detection (BruteForce / SSH-Patator) and Mitigation (T1110) were both correct, but the Judge LLM replied "finalize" without an allowed final action, the reply was rejected, and it escalated.
 
@@ -41,8 +42,8 @@ Notes:
 Detection does not use an LLM in this pipeline, so its output was identical in every mode.
 
 - All 8 benign rows: no action.
-- 12 of 14 attack labels: acted, with a technique matching the true category, on both rows (including both Web Attack XSS rows).
-- The 3 misses, all on the three rarest classes:
+- 11 of 14 attack labels: acted, with a technique matching the true category, on both rows (including both Web Attack XSS rows).
+- The other 3 labels, the three rarest classes, each missed one row:
 
 | Task | Detection behaviour | Outcome |
 |---|---|---|
@@ -68,11 +69,11 @@ Followed only the root README steps in a new clone (`fresh-check`) with a new vi
 | `python scripts/make_cicids_tasks.py` with an empty kagglehub cache | OK; dataset downloaded with no Kaggle account; output identical to main copy |
 | Unseen tasks, rules mode | 33/36, all 36 outcomes identical to the main copy |
 
-Latency note: median task time on the unseen run was 0.04 s, but the slowest was 10 s (82 s on the very first run on this PC). This is the Correlation text-search model loading on first use.
+Latency note: on the unseen tasks in rules mode, the median task time was 0.04 s with a maximum of 10.0 s in the fresh-clone run (`20261013-142318`), and 0.05 s with a maximum of 11.9 s (U-Heartbleed-1) in the full run (`20261013-023242`). The very first run on this PC took 82 s on that task. The slow task is the first "Unknown" event, when the Correlation text-search model loads.
 
 ## 5. Suggested fixes
 
-1. README: root `requirements.txt` already includes Detection's packages, so the separate `requirements-detection.txt` step is redundant.
+1. README: root `requirements.txt` already includes Detection's packages, so the separate `requirements-detection.txt` (file since removed in the follow-up PR) step is redundant.
 2. `requirements.txt`: `litellm` is listed twice; comments still mention the old `mcp_server.py` name.
 3. README: state that the CICIDS2017 download needs no Kaggle account, and give a rough time for download and training.
 4. `evaluation/results/`: two old dev-run folders (`20261012-230119`, `20261012-230935`) are committed; remove before final submission.

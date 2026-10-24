@@ -16,7 +16,7 @@ from src.detection.training import train_binary, train_category
 def main():
     print("=== Training binary model (BENIGN vs anomalous) ===")
     train_binary.main()
-    print("\n=== Training category model (attack category, anomalous rows only) ===")
+    print("\n=== Training category model (15 fine CICIDS2017 labels, incl. downsampled Benign) ===")
     train_category.main()
 
 

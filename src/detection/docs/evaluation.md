@@ -9,7 +9,7 @@ category decision and the false-positive rate look the way they do, see
 ## Running the sampled evaluation
 
 ```sh
-python -m src.detection.evaluate --sample-size 200 --sampling random --llm-timeout 20 --llm-delay 0
+python -m src.detection.evaluation.evaluate --sample-size 200 --sampling random --llm-timeout 20 --llm-delay 0
 ```
 
 Prints the resolved `DETECTION_LLM_MODEL`, then runs `DetectionManager` with
@@ -90,7 +90,7 @@ anomalous, what percentage got a specific attack category rather than
 **59.3%** (227/383 false positives) at the default threshold 0.80 (48.6%,
 186/383, at 0.90 — a lower threshold trusts more borderline calls, on false
 positives too). `print_summary` prints it right after
-the category report, and `evaluate.py`'s CSV carries each row's
+the category report, and `evaluation/evaluate.py`'s CSV carries each row's
 `model_disagreement` flag (True when `_choose_category`'s top vote was
 Benign for that event) — the console summary also prints the total
 `model_disagreement_count` for the run. The residual is not obviously a
@@ -110,7 +110,7 @@ python -m src.detection.evaluation.evaluate --offline [--category-threshold 0.8]
 
 A different mode from everything above: no `DetectionManager`/
 `DetectionSubagent`, no per-event agent loop, no LLM at all —
-`offline_eval.py` batch-predicts both classifiers directly
+`evaluation/offline.py` batch-predicts both classifiers directly
 (`model.predict_proba` over the whole feature matrix at once) over the
 **entire TEST split** (hundreds of thousands of rows, not a sample), which
 is both simpler and far faster than looping `DetectionManager.run()` per
@@ -135,7 +135,7 @@ event. It reports:
   answer. Coarse coverage >= fine coverage, because the group can clear the
   threshold when no single sub-type does.
 
-Any class with support < `offline_eval.MIN_EVAL_SUPPORT` (50) is marked
+Any class with support < `evaluation.offline.MIN_EVAL_SUPPORT` (50) is marked
 **"too small to evaluate"** in the tables, and every macro F1 is printed twice:
 over all attack classes, and excluding those too-small classes.
 
@@ -234,7 +234,7 @@ Sql Injection has 2 test rows — no conclusion possible.
 ### Threshold sweep and recommendation rule
 
 `--offline` sweeps `CATEGORY_CONFIDENCE_THRESHOLD` over
-`offline_eval.CATEGORY_THRESHOLD_SWEEP` (0.5/0.6/0.7/0.8/0.9) — **on a
+`evaluation.offline.CATEGORY_THRESHOLD_SWEEP` (0.5/0.6/0.7/0.8/0.9) — **on a
 VALIDATION split carved from TRAIN** (`data.split_validation`), never on
 TEST. Prints the table and saves it to
 `src/detection/results/category_threshold_sweep.csv` (gitignored). A real
